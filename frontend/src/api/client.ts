@@ -68,6 +68,25 @@ export const api = {
   autoedit: (id: string, settings: AutoEditSettings) => req<Job>("POST", `/api/projects/${id}/autoedit`, settings),
   export: (id: string, r: ExportRequest) => req<Job>("POST", `/api/projects/${id}/export`, r),
 
+  scenes: (id: string, threshold = 27) => req<Job>("POST", `/api/projects/${id}/scenes`, { threshold }),
+  facetrack: (id: string) => req<Job>("POST", `/api/projects/${id}/facetrack`),
+  previewClip: (id: string, center: number, span: number) =>
+    req<Job>("POST", `/api/projects/${id}/preview-clip`, { center, span }),
+  previewClipUrl: (id: string, name: string) => `/api/projects/${id}/previews/${encodeURIComponent(name)}`,
+  uploadMusic: (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return req<Project>("POST", `/api/projects/${id}/music`, fd, true);
+  },
+  deleteMusic: (id: string) => req<Project>("DELETE", `/api/projects/${id}/music`),
+  musicUrl: (id: string, v: string) => `/api/projects/${id}/media/music?v=${encodeURIComponent(v)}`,
+  importProject: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return req<Project>("POST", "/api/projects/import", fd, true);
+  },
+  relink: (id: string, path: string, force = false) => req<Job>("POST", `/api/projects/${id}/relink`, { path, force }),
+
   jobs: (id: string) => req<Job[]>("GET", `/api/projects/${id}/jobs`),
   cancelJob: (jid: string) => req<{ ok: boolean }>("POST", `/api/jobs/${jid}/cancel`),
   exports: (id: string) => req<ExportFile[]>("GET", `/api/projects/${id}/exports`),

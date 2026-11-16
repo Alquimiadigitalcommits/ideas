@@ -1,24 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
 import type { Cut, ExportRequest, Job, SystemInfo } from "./api/types";
+import { AudioPanel } from "./components/AudioPanel";
 import { AutoEditPanel } from "./components/AutoEditPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { FormatPanel } from "./components/FormatPanel";
 import { ImportDropzone } from "./components/ImportDropzone";
 import { JobBar } from "./components/JobBar";
 import { Monitor } from "./components/Monitor";
+import { PreviewModal } from "./components/PreviewModal";
 import { ProjectsPanel } from "./components/ProjectsPanel";
+import { RelinkPanel } from "./components/RelinkPanel";
 import { StylePanel } from "./components/StylePanel";
 import { SubtitlesPanel } from "./components/SubtitlesPanel";
 import { Timeline } from "./components/Timeline";
+import { TransitionsPanel } from "./components/TransitionsPanel";
 import { Transport } from "./components/Transport";
 import { uid } from "./lib/captions";
 import { fmtBytes } from "./lib/format";
+import { editSegments } from "./lib/joins";
+import { toOutput } from "./lib/timemap";
 import { useJobs } from "./state/useJobs";
 import { useProject } from "./state/useProject";
 
-type Tab = "autoedit" | "subtitles" | "style" | "format" | "export";
-const TABS: [Tab, string][] = [["autoedit", "Auto-edición"], ["subtitles", "Subtítulos"], ["style", "Estilo"], ["format", "Formato"], ["export", "Exportar"]];
+type Tab = "autoedit" | "subtitles" | "style" | "format" | "transitions" | "audio" | "export";
+const TABS: [Tab, string][] = [["autoedit", "Cortes"], ["subtitles", "Subtítulos"], ["style", "Estilo"], ["format", "Formato"],
+  ["transitions", "Transiciones"], ["audio", "Audio"], ["export", "Exportar"]];
 
 const SAVE_LABEL = { saved: "Guardado ✓", dirty: "Cambios sin guardar…", saving: "Guardando…", error: "Error al guardar" };
 
@@ -40,9 +47,11 @@ export default function App() {
   const [listKey, setListKey] = useState(0);
   const [lastExport, setLastExport] = useState<Job | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [previewJob, setPreviewJob] = useState<Job | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const { project, updateDoc, rename, flush, reload, saveState, notice, setNotice } = useProject(projectId);
+  const { project, updateDoc, rename, flush, reload, saveState, notice, setNotice, undo, redo, canUndo, canRedo } =
+    useProject(projectId);
   const doc = project?.doc;
 
   useEffect(() => {
@@ -63,6 +72,10 @@ export default function App() {
         setToast(`Auto-edición: ${j.result.cuts} cortes, −${j.result.removed_seconds} s. Revisa y recupera lo que quieras conservar.`);
       if (j.kind === "transcribe" && j.result) setToast(`Transcripción lista: ${j.result.words} palabras (${j.result.language}).`);
       if (j.kind === "export") { setLastExport(j); setToast(`Exportación lista: ${j.result?.video}`); }
+      if (j.kind === "scenes" && j.result) setToast(`${j.result.scenes} cambios de escena detectados.`);
+      if (j.kind === "facetrack" && j.result)
+        setToast(`Rostro detectado en el ${Math.round(j.result.detection_rate * 100)} % de las muestras · ${j.result.keyframes} puntos clave.`);
+      if (j.kind === "preview") setPreviewJob(j);
       setListKey((k) => k + 1);
     } else if (j.status === "canceled") setToast("Operación cancelada.");
     if (j.kind === "export") setLastExport(j);
@@ -89,6 +102,15 @@ export default function App() {
   const runAutoEdit = () => doc && start(() => api.autoedit(project!.id, doc.autoedit));
   const runTranscribe = (model: string, lang: string | null) => start(() => api.transcribe(project!.id, model, lang));
   const runExport = (r: ExportRequest) => start(() => api.export(project!.id, r));
+  const runScenes = (th: number) => start(() => api.scenes(project!.id, th));
+  const runFaceTrack = () => start(() => api.facetrack(project!.id));
+  const runPreview = (center: number) => start(() => api.previewClip(project!.id, center, 3));
+  /** Cambios que hace el servidor sobre el documento (p. ej. subir música): guardar antes, recargar después. */
+  const serverChange = async (fn: () => Promise<unknown>) => {
+    await flush();
+    await fn();
+    await reload();
+  };
   const updateCuts = useCallback((fn: (c: Cut[]) => Cut[]) => updateDoc((d) => ({ ...d, cuts: fn(d.cuts) })), [updateDoc]);
 
   const seek = useCallback((t: number) => {
@@ -107,11 +129,19 @@ export default function App() {
     setMarkIn(null); setMarkOut(null);
   }, [markIn, markOut, currentTime, updateCuts]);
 
+  const splitHere = useCallback(() => {
+    updateCuts((cuts) => [...cuts, { id: uid(), start: currentTime, end: currentTime, kind: "split" as const, enabled: true,
+      reason: "División manual" }].sort((a, b) => a.start - b.start));
+  }, [currentTime, updateCuts]);
+
   // atajos de teclado
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || !doc?.media) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+      if (e.ctrlKey || e.metaKey) return;
       const v = videoRef.current;
       const fps = doc.media.fps || 30;
       const k = e.key.toLowerCase();
@@ -125,13 +155,14 @@ export default function App() {
       else if (k === "i") { setMarkIn(currentTime); setMarkOut(null); }
       else if (k === "o") { if (markIn !== null) setMarkOut(currentTime); }
       else if (k === "x") cutMarkedRange();
+      else if (k === "s") splitHere();
       else if (e.key === "Escape") { setMarkIn(null); setMarkOut(null); setSelectedCut(null); }
       else if ((e.key === "Delete" || e.key === "Backspace") && selectedCut)
         updateCuts((c) => c.map((x) => (x.id === selectedCut ? { ...x, enabled: !x.enabled } : x)));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc?.media, currentTime, markIn, selectedCut, cutMarkedRange, seek, updateCuts]);
+  }, [doc?.media, currentTime, markIn, selectedCut, cutMarkedRange, seek, updateCuts, undo, redo, splitHere]);
 
   return (
     <div className={"app" + (showProjects ? "" : " no-projects")}>
@@ -141,6 +172,8 @@ export default function App() {
         {project && (
           <>
             <input className="project-name" value={project.name} onChange={(e) => rename(e.target.value)} />
+            <button className="icon-btn" title="Deshacer (Ctrl+Z)" disabled={!canUndo} onClick={undo}>↶</button>
+            <button className="icon-btn" title="Rehacer (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↷</button>
             <span className={`save-state ${saveState}`}>{SAVE_LABEL[saveState]}</span>
           </>
         )}
@@ -173,8 +206,11 @@ export default function App() {
             <p className="muted">Crea o abre un proyecto en el panel izquierdo para empezar.</p>
           </div>
         )}
+        {project && doc?.media && project.media_available === false && (
+          <RelinkPanel project={project} onDone={() => { reload(); refreshJobs(); }} />
+        )}
         {project && !doc?.media && <ImportDropzone projectId={project.id} onImported={() => { reload(); refreshJobs(); }} />}
-        {project && doc?.media && (
+        {project && doc?.media && project.media_available !== false && (
           <>
             <div className="viewer">
               <Monitor projectId={project.id} doc={doc} videoRef={videoRef} applyCuts={applyCuts}
@@ -195,7 +231,13 @@ export default function App() {
                 defaultModel={system?.default_whisper_model ?? "base"} currentTime={currentTime} onSeek={seek}
                 selectedCaption={selectedCaption} setSelectedCaption={setSelectedCaption} />}
               {tab === "style" && <StylePanel doc={doc} updateDoc={updateDoc} fonts={fonts} />}
-              {tab === "format" && <FormatPanel doc={doc} updateDoc={updateDoc} />}
+              {tab === "format" && <FormatPanel doc={doc} updateDoc={updateDoc} runFaceTrack={runFaceTrack}
+                trackRunning={isRunning("facetrack")} />}
+              {tab === "transitions" && <TransitionsPanel doc={doc} updateDoc={updateDoc} selectedCut={selectedCut}
+                setSelectedCut={setSelectedCut} onSeek={seek} runScenes={runScenes} scenesRunning={isRunning("scenes")}
+                preview={runPreview} previewRunning={isRunning("preview")}
+                currentOut={toOutput(editSegments(doc.cuts, doc.media.duration), currentTime)} />}
+              {tab === "audio" && <AudioPanel projectId={project.id} doc={doc} updateDoc={updateDoc} serverChange={serverChange} />}
               {tab === "export" && system && <ExportPanel projectId={project.id} doc={doc} updateDoc={updateDoc}
                 profiles={system.profiles} runExport={runExport} running={isRunning("export")} lastExport={lastExport} />}
             </aside>
@@ -218,6 +260,7 @@ export default function App() {
       <footer className="statusbar">
         <JobBar jobs={jobs} onChange={refreshJobs} />
         {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
+        {previewJob && project && <PreviewModal projectId={project.id} job={previewJob} onClose={() => setPreviewJob(null)} />}
       </footer>
     </div>
   );

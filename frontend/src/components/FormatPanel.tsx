@@ -1,9 +1,11 @@
 import type { Aspect, FormatSettings, ProjectDoc } from "../api/types";
-import { Section, Segmented, Slider } from "./ui";
+import { Check, Section, Segmented, Slider } from "./ui";
 
 interface Props {
   doc: ProjectDoc;
   updateDoc: (fn: (d: ProjectDoc) => ProjectDoc) => void;
+  runFaceTrack: () => void;
+  trackRunning: boolean;
 }
 
 const AspectIcon = ({ a }: { a: Aspect }) => {
@@ -11,7 +13,7 @@ const AspectIcon = ({ a }: { a: Aspect }) => {
   return <span className="aspect-icon" style={{ width: w, height: h }} />;
 };
 
-export function FormatPanel({ doc, updateDoc }: Props) {
+export function FormatPanel({ doc, updateDoc, runFaceTrack, trackRunning }: Props) {
   const f = doc.format;
   const set = (patch: Partial<FormatSettings>) => updateDoc((d) => ({ ...d, format: { ...d.format, ...patch } }));
   const m = doc.media;
@@ -42,6 +44,24 @@ export function FormatPanel({ doc, updateDoc }: Props) {
             <button className="btn ghost small" onClick={() => set({ offset_x: 0.5, offset_y: 0.5, zoom: 1 })}>Centrar</button>
           </>
         )}
+      </Section>
+      <Section title="Seguir el rostro">
+        <p className="muted small">Detecta la cara en todo el video y mueve el recorte para mantenerla en cuadro, con movimiento suave (cámara virtual).</p>
+        <button className="btn full" disabled={trackRunning} onClick={runFaceTrack}>
+          {trackRunning ? "Analizando…" : f.track.length ? "Volver a detectar el rostro" : "🙂 Detectar y seguir el rostro"}
+        </button>
+        {f.track.length > 0 && (
+          <>
+            <Check label={`Seguimiento activo (${f.track.length} puntos clave)`} checked={f.track_enabled}
+              onChange={(v) => set({ track_enabled: v, mode: v ? "crop" : f.mode })} />
+            {f.track_enabled && f.mode !== "crop" && <small className="hint error">Solo funciona en modo Recortar.</small>}
+            <small className="hint">Con el seguimiento activo, la posición horizontal manual se ignora.</small>
+          </>
+        )}
+      </Section>
+      <Section title="Zoom alternado en cortes">
+        <Slider label="Acercamiento" value={f.jump_zoom} min={0} max={0.3} step={0.01} unit="" digits={2}
+          onChange={(v) => set({ jump_zoom: v })} hint="0 = desactivado. Cada segmento por medio se acerca este porcentaje: disimula los cortes en videos hablados (jump cut)." />
       </Section>
     </div>
   );

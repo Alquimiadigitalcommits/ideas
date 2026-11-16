@@ -1,7 +1,7 @@
 import type { ProjectDoc, SubtitleStyle } from "../api/types";
 import { regroup } from "../lib/captions";
 import { SUBTITLE_PRESETS } from "../lib/presets";
-import { Check, Color, Section, Slider } from "./ui";
+import { Check, Color, Section, Segmented, Slider } from "./ui";
 
 interface Props {
   doc: ProjectDoc;
@@ -26,7 +26,7 @@ export function StylePanel({ doc, updateDoc, fonts }: Props) {
         <div className="preset-grid">
           {Object.entries(SUBTITLE_PRESETS).map(([key, { label, ...st }]) => (
             <button key={key} className={"preset" + (s.preset === key ? " active" : "")}
-              onClick={() => set({ ...st, preset: key })}
+              onClick={() => (st.max_words && st.max_words !== s.max_words ? setGrouping({ ...st, preset: key }) : set({ ...st, preset: key }))}
               style={{ fontFamily: st.font_family, color: st.primary_color, fontWeight: st.bold ? 800 : 500,
                 textShadow: `0 0 3px ${st.outline_color}, 0 0 1px ${st.outline_color}` }}>
               {st.uppercase ? label.toUpperCase() : label}
@@ -60,6 +60,12 @@ export function StylePanel({ doc, updateDoc, fonts }: Props) {
         <Slider label="Grosor de contorno" value={s.outline_width} min={0} max={12} step={0.5} digits={1}
           onChange={(v) => set({ outline_width: v })} />
         <Slider label="Sombra" value={s.shadow} min={0} max={12} step={0.5} digits={1} onChange={(v) => set({ shadow: v })} />
+      </Section>
+      <Section title="Animación">
+        <Segmented value={s.animation} onChange={(v) => set({ animation: v })} options={[
+          { value: "none", label: "Ninguna" }, { value: "pop", label: "Pop" }, { value: "fade", label: "Fundido" },
+          { value: "slide", label: "Subir" }, { value: "typewriter", label: "Palabra a palabra" }]} />
+        <small className="hint">Pop con resaltado activo agranda la palabra que se dice; sin resaltado, toda la frase.</small>
       </Section>
       <Section title="Posición y agrupación">
         <Slider label="Posición vertical" value={s.position_y} min={0.08} max={0.95} step={0.01}

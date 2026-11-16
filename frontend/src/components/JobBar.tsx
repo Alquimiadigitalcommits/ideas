@@ -4,6 +4,7 @@ import type { Job } from "../api/types";
 
 const LABEL: Record<string, string> = {
   prepare: "Preparación", transcribe: "Transcripción", autoedit: "Auto-edición", export: "Exportación",
+  scenes: "Escenas", facetrack: "Rostro", preview: "Previsualización",
 };
 
 export function JobBar({ jobs, onChange }: { jobs: Job[]; onChange: () => void }) {

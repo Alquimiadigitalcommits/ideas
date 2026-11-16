@@ -26,8 +26,8 @@ def _rdp(points: list[list[float]], eps: float) -> list[list[float]]:
     return _rdp(points[: idx + 1], eps)[:-1] + _rdp(points[idx:], eps)
 
 
-def track_faces(path: str, duration: float, *, samples_per_second: float = 4.0, deadzone: float = 0.05,
-                smoothing: float = 0.35, on_progress: Optional[Callable[[float], None]] = None,
+def track_faces(path: str, duration: float, *, samples_per_second: float = 4.0, deadzone: float = 0.02,
+                smoothing: float = 0.45, on_progress: Optional[Callable[[float], None]] = None,
                 cancel_event=None) -> dict:
     import cv2
 

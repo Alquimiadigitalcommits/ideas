@@ -3,7 +3,7 @@
 Editor de video local que importa un video, lo transcribe, propone cortes de silencios,
 genera subtítulos editables con estilo y exporta para TikTok, Reels, Shorts y YouTube con FFmpeg.
 
-Estado: **MVP (etapa 1)**. Diseño completo, riesgos y plan de etapas en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
+Estado: **etapas 0 a 5 completas; etapa 6 parcial** (ejecutable autónomo listo, falta envoltorio nativo e instaladores). Diseño completo, riesgos y plan de etapas en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 
 ![Editor](docs/captura-editor.png)
 
@@ -13,7 +13,7 @@ Estado: **MVP (etapa 1)**. Diseño completo, riesgos y plan de etapas en [`docs/
 |---|---|---|
 | Python | 3.13 (≥ 3.10) | Motor y API |
 | Node.js | 22 (≥ 18) | Compilar la interfaz |
-| FFmpeg + FFprobe | 6.1, con `libx264` y `libass` | Todo el procesamiento |
+| FFmpeg + FFprobe | 6.1, con `libx264` y `libass` | Todo el procesamiento (no hace falta en el ejecutable empaquetado si se incluye) |
 | Conexión a internet | solo la primera vez por modelo | Descarga del modelo Whisper desde HuggingFace (tiny 75 MB · base 145 MB · small 480 MB) |
 
 FFmpeg: en Windows `winget install Gyan.FFmpeg`; en macOS `brew install ffmpeg`; en Linux `apt install ffmpeg`.
@@ -53,7 +53,9 @@ Flujo típico:
 3. **✨ Auto-editar**: detecta pausas y las marca como cortes (rayado rojo en la línea de tiempo).
 4. Revisa: doble clic en un corte para recuperarlo, arrastra sus bordes, o marca un rango con **I** / **O** y pulsa **X** para cortar a mano.
 5. **Formato** 9:16 / 16:9 / 1:1 y **Estilo** de subtítulos. La vista previa refleja ambos en vivo.
-6. **Exportar**: elige perfil de plataforma → MP4 (+ SRT opcional).
+6. **Transiciones**: elige una para todas las uniones o ajusta cada ◆ por separado; **▶ Previsualización exacta** renderiza 3 s reales con FFmpeg.
+7. **Audio**: reducción de ruido, música de fondo con ducking y fundidos.
+8. **Exportar**: elige perfil de plataforma → MP4 (+ SRT opcional).
 
 ### Atajos de teclado
 
@@ -63,6 +65,9 @@ Flujo típico:
 | ← / → (Shift: ×5) | −1 s / +1 s |
 | , / . | −1 / +1 frame |
 | I / O / X | Marcar entrada / salida / eliminar el rango marcado |
+| S | Dividir en el cabezal (unión sin quitar material, para poner una transición) |
+| Ctrl+Z / Ctrl+Shift+Z (o Ctrl+Y) | Deshacer / rehacer (también deshace auto-edición y transcripción) |
+| Alt mientras arrastras | Desactiva el imán |
 | Supr | Recuperar o volver a cortar el corte seleccionado |
 | Esc | Quitar selección y marcas |
 
@@ -73,6 +78,17 @@ scripts/dev.sh
 ```
 
 Interfaz con recarga en caliente en `http://localhost:5173`.
+
+## Ejecutable autónomo (etapa 6)
+
+```bash
+scripts/build_desktop.sh /carpeta/con/ffmpeg_y_ffprobe
+```
+
+Genera `dist/SmartVideoEditor/` (646 MB en Linux, con FFmpeg incluido en `dist/SmartVideoEditor/ffmpeg/`).
+Al ejecutarlo levanta el motor y abre el navegador. Requiere `pip install pyinstaller` y debe
+construirse en cada sistema operativo de destino (PyInstaller no compila de forma cruzada).
+Probado en Linux con un PATH sin FFmpeg: importar, transcribir, auto-editar, escenas, rostro y exportar funcionaron.
 
 ## Pruebas
 
@@ -92,7 +108,11 @@ El último requiere la app corriendo y Playwright instalado. Los tests de backen
 propios videos de prueba con FFmpeg; los de voz usan `espeak-ng` (`scripts/make_test_video.sh`) y se
 omiten si no está instalado.
 
-Resultado al cierre de esta etapa: 43 tests de backend, 5 de frontend y la prueba E2E en navegador, todos pasando.
+```bash
+node e2e/stages.cjs video_con_rostro_y_voz.mp4 musica.mp3 carpeta_capturas
+```
+
+Resultado actual: 72 tests de backend, 8 de frontend y las dos pruebas E2E en navegador, todos pasando.
 
 ## Qué funciona (verificado con tests)
 
@@ -117,26 +137,47 @@ Resultado al cierre de esta etapa: 43 tests de backend, 5 de frontend y la prueb
 | Jobs con progreso, cancelación y limpieza de archivos parciales | ✅ | `test_api.py::test_upload_and_cancel_export` |
 | Autoguardado con control de versiones (evita pisar resultados de un proceso) | ✅ | Conflicto 409 probado |
 | Persistencia de proyectos (SQLite) y copia `.json` descargable | ✅ | E2E: recarga de página |
+| **Etapa 2** · Deshacer / rehacer (100 pasos, agrupa arrastres de deslizadores) | ✅ | E2E: 6 cortes → 0 → 6 |
+| Divisiones (S) e imán a palabras, escenas, cortes y cabezal | ✅ | `test_edit_segments_with_splits`, E2E |
+| Animaciones de subtítulos: pop, fundido, subir, palabra a palabra (vista previa y render) | ✅ | `test_subtitle_animations`, render |
+| 8 preajustes de estilo (nuevos: Neón pop, Podcast, Máquina de escribir) | ✅ | E2E |
+| Importar proyecto `.json` y reconectar el video si cambió de lugar | ✅ | `test_import_project_and_relink` |
+| **Etapa 3** · Detección de cambios de escena (PySceneDetect) | ✅ | Escenas en 2,0 y 4,5 s detectadas con error ≤ 80 ms |
+| Reencuadre siguiendo el rostro (cámara virtual suave) | ✅ | 100 % de detección; cámara a < 0,02 del rostro |
+| Zoom alternado por segmento (jump cut) | ✅ | Render con 31 segmentos |
+| **Etapa 4** · Transiciones: fundido, disolución, zoom, desenfoque, deslizamiento, flash | ✅ | Las 6 preservan duración (±45 ms) y sincronía (< 25 ms) |
+| Duración, intensidad (fundido/flash/zoom/desenfoque) y dirección (deslizamiento) | ✅ | Luminancia medida en la unión: intensidad 1 → negro, 0,5 → gris medio, 0 → intacto |
+| Aplicación masiva (por defecto) o individual por unión; divisiones en cada escena | ✅ | API + E2E |
+| Previsualización exacta: render parcial de 3 s con FFmpeg | ✅ | `test_jump_zoom_and_window_render`, E2E (3,00 s) |
+| **Etapa 5** · Reducción de ruido con piso de ruido medido automáticamente | ✅ | Ruido en pausa −30 dB, voz intacta |
+| Paso alto (80 Hz), volumen de voz | ✅ | Render |
+| Música de fondo: volumen, inicio, repetición, fundidos de entrada/salida | ✅ | Nivel = original −16 dB (±1,5) |
+| Ducking (la música baja cuando hay voz) | ✅ | Banda de la música ≥ 6 dB más baja bajo la voz |
+| Fundido a negro de entrada y salida del resultado (imagen y sonido) | ✅ | Luminancia y nivel medidos |
+| **Etapa 6** · Ejecutable autónomo con FFmpeg incluido | ✅ Linux | Flujo completo por API sin FFmpeg en el sistema |
 
 ## Pendiente (no implementado)
 
-| Función | Etapa |
-|---|---|
-| Deshacer / rehacer | 2 |
-| Animaciones de subtítulos (pop, bounce, máquina de escribir) | 2 |
-| Importar un proyecto `.json` | 2 |
-| Detección de escenas (PySceneDetect) | 3 |
-| Reencuadre automático siguiendo rostros (OpenCV) | 3 |
-| Transiciones: fundido, disolución, zoom, desenfoque, deslizamiento, flash | 4 |
-| Reducción de ruido, música de fondo, mezcla, ducking, fundidos de audio | 5 |
-| Aplicación de escritorio empaquetada (Tauri) con FFmpeg incluido | 6 |
+| Función | Etapa | Motivo |
+|---|---|---|
+| Envoltorio nativo con Tauri (ventana propia, diálogos de archivo con ruta real) | 6 | Requiere Rust y SDK de cada sistema; no se pudo verificar en este entorno |
+| Instaladores firmados para Windows (.msi) y macOS (.dmg) | 6 | Requiere construir y firmar en cada sistema |
+| Reducción del tamaño del ejecutable (hoy 646 MB) | 6 | PyAV (101 MB) lo importa faster-whisper aunque no se use |
+| Seguimiento de rostros de perfil o varias personas | 3 | Hoy: rostro frontal principal |
+| Previsualización en vivo exacta de disolución y deslizamiento | 4 | En vivo se aproximan; la previsualización exacta sí es real |
 
 ## Limitaciones conocidas
 
-- **Videos largos**: la arquitectura está pensada para ellos (proxy, grafos por archivo, waveform por tramos), pero en esta etapa solo se probó con videos de 8 a 22 s. Whisper `base` procesó 21,7 s de audio en 2,1 s en una CPU de 4 núcleos; extrapolado, 1 h de audio tomaría unos 6 min (estimación, audio limpio).
+- **Videos largos**: ver la medición con un video de 20 min en la sección siguiente.
 - **Subir un archivo lo copia** a la carpeta del proyecto (el navegador no entrega la ruta real). Para archivos de varios GB usa "usar desde su ubicación".
-- **Volver a auto-editar** reemplaza los cortes de silencio (los manuales se conservan), así que se pierden los silencios que habías recuperado. **Volver a transcribir** reemplaza los subtítulos (pide confirmación si hay ediciones).
-- La vista previa de subtítulos es HTML/CSS calibrado contra libass (factor 0,82). En Inter coincide en ±1 % de ancho; otras fuentes pueden variar unos píxeles.
+- **Volver a auto-editar** reemplaza los cortes de silencio (los manuales y las divisiones se conservan); se puede deshacer con Ctrl+Z. **Volver a transcribir** reemplaza los subtítulos.
+- **Vista previa en vivo**: subtítulos, formato, rostro, zoom, fundidos y flash coinciden con el render; disolución y deslizamiento se aproximan, y la reducción de ruido y el ducking exacto solo se oyen en la previsualización exacta y la exportación.
+- **Seguimiento de rostro**: detector Haar de rostros frontales; perfiles y caras pequeñas (< 1/32 del ancho) pueden perderse. Si no encuentra rostro, el proceso avisa y no cambia el encuadre.
+- **Disolución y deslizamiento** necesitan material eliminado a ambos lados: en divisiones (sin corte) se omiten y la exportación informa cuántas.
 - Se usa solo la primera pista de audio del archivo.
 - Videos de FPS variable (celulares): la exportación fuerza FPS constante; no se ha probado aún con grabaciones reales de teléfono.
 - Probado en Linux. Windows y macOS no se han probado todavía.
+
+## Rendimiento con un video largo
+
+BENCH_PLACEHOLDER

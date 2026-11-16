@@ -80,6 +80,38 @@ borde de segmento se ajusta a la grilla de frames del FPS de salida, para que
 la duración de audio y video de cada segmento sea idéntica. El grafo se pasa
 por archivo (`-filter_complex_script`) para soportar cientos de segmentos.
 
+### 1.6 Transiciones sin alterar la duración (etapa 4)
+
+Las transiciones viven en las **uniones**: el punto donde termina un segmento conservado y empieza
+el siguiente. Una unión la crea un corte, o una **división** (corte de longitud cero que no quita
+material: sirve para poner una transición en un cambio de escena).
+
+- **Cruce con solapamiento** (`xfade`/`acrossfade`): cada lado se extiende hacia el interior del
+  corte la mitad de la duración (“handles”) y se superponen. La duración total y la posición de cada
+  unión no cambian, así que subtítulos y audio no se mueven. Sin material eliminado (divisiones) no
+  hay solapamiento: disolución y deslizamiento se omiten y el render lo informa.
+- **Efectos en el tiempo** sobre la salida ya reencuadrada, con filtros rápidos: `eq` para fundido
+  a negro y flash (fórmula exacta hacia el negro 16 / blanco 235 de video), `scale+crop` con
+  `eval=frame` para zoom, `gblur` controlado por `sendcmd` para desenfoque. La intensidad es real.
+- Se descartaron las transiciones personalizadas píxel a píxel de `xfade`: medidas en 1080p tardan
+  5–8 s cada una contra 0,6 s de las nativas.
+
+### 1.7 Seguimiento de rostro como “cámara virtual” (etapa 3)
+
+OpenCV (clasificador Haar incluido en `opencv-python-headless` 4.x; la versión 5 ya no lo trae)
+muestrea el proxy 4 veces por segundo. La trayectoria se rellena, se filtra con mediana, pasa por una
+cámara con zona muerta (2 % del ancho) y suavizado, y se simplifica con Ramer–Douglas–Peucker
+(típicamente 4–20 puntos). En el render, la `x` del `crop` es una expresión lineal por tramos en el
+tiempo de salida, con saltos exactos en las uniones.
+
+### 1.8 Audio (etapa 5)
+
+Paso alto → reducción de ruido (`afftdn` con el piso de ruido **medido** en la pausa más larga: el
+modo de seguimiento automático casi no actúa, se midió 1,4 dB vs 30 dB) → cortes con micro-fundidos
+anti-clic de 6 ms → cruces → ganancia de voz → música (envolvente de volumen y fundidos evaluados
+por cuadro, ducking con `sidechaincompress` escuchando la voz) → normalización → fundidos globales →
+marcas de tiempo continuas y duración exacta del video.
+
 ---
 
 ## 2. Estructura de carpetas
@@ -110,7 +142,11 @@ smart-video-editor/
 │   │       ├── timeline.py    Segmentos conservados y mapeo de tiempos
 │   │       ├── subtitles.py   Agrupación en frases, SRT, ASS
 │   │       ├── reframe.py     Filtros de formato 9:16 / 16:9 / 1:1
-│   │       └── render.py      Exportación final
+│   │       ├── scenes.py      Cambios de escena (PySceneDetect)
+│   │       ├── facetrack.py   Seguimiento de rostro (OpenCV)
+│   │       ├── audio.py       Piso de ruido para la reducción de ruido
+│   │       └── render.py      Exportación final y render parcial (previsualización exacta)
+│   └── packaging/launcher.py  Punto de entrada del ejecutable (PyInstaller)
 │   └── tests/                 pytest por módulo + prueba de API completa
 └── frontend/
     ├── package.json, vite.config.ts, tsconfig.json
@@ -198,10 +234,13 @@ Diseño oscuro de 3 zonas + timeline inferior:
 
 | Etapa | Contenido | Criterio de salida |
 |---|---|---|
+Estado al 16/11/2026: etapas 0 a 5 implementadas y probadas; etapa 6 parcial (ejecutable
+PyInstaller probado en Linux; envoltorio Tauri e instaladores pendientes).
+
 | **0. Base** | Estructura, SQLite, jobs con progreso/cancelación, ffprobe | Tests de jobs y probe pasan |
 | **1. MVP** | Importación, proxy, forma de onda, miniaturas, transcripción, auto-edición por silencios, cortes recuperables, subtítulos editables con estilo, 9:16 / 16:9 / 1:1, exportación MP4 + SRT, autoguardado | Exportación real verificada: duración = suma de segmentos, audio y video alineados, subtítulos en tiempo de salida |
-| 2. Edición avanzada | Deshacer/rehacer, división manual de clips, arrastre de bordes con imán, animaciones de subtítulos (pop, bounce, typewriter), más preajustes, importar/exportar `.svep` | |
-| 3. Análisis visual | PySceneDetect (cortes por escena), OpenCV (seguimiento de rostro para reencuadre automático 9:16), keyframes de reencuadre | |
-| 4. Transiciones | Fundido, disolución, zoom, desenfoque, deslizamiento, flash (`xfade` + filtros), aplicación individual/masiva, duración e intensidad | |
-| 5. Audio | Reducción de ruido (`afftdn`/RNNoise), música de fondo, mezcla, ducking automático (`sidechaincompress`), fundidos | |
-| 6. Empaquetado | Tauri + sidecar PyInstaller, FFmpeg incluido, instaladores Windows/macOS | |
+| **2. Edición avanzada** ✅ | Deshacer/rehacer, divisiones, imán, animaciones de subtítulos (pop, fundido, subir, palabra a palabra), 8 preajustes, importar proyecto y reconectar video | Tests de ASS, API de importación/reconexión, E2E de deshacer |
+| **3. Análisis visual** ✅ | PySceneDetect, seguimiento de rostro con cámara virtual, zoom alternado | Escenas ±80 ms; rostro con 100 % de detección y error < 0,02 |
+| **4. Transiciones** ✅ | Las 6 transiciones, por defecto o individuales, duración, intensidad, dirección; previsualización exacta por render parcial | Duración y sincronía preservadas; luminancia medida en la unión |
+| **5. Audio** ✅ | Reducción de ruido, paso alto, música, envolvente, ducking, fundidos | Piso de ruido −30 dB; ducking ≥ 6 dB en banda medida |
+| 6. Empaquetado (parcial) | Ejecutable PyInstaller con FFmpeg incluido ✅ · Tauri, firma e instaladores Windows/macOS ⏳ | Ejecutable probado en Linux sin FFmpeg en el sistema |

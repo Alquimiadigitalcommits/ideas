@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Project } from "../api/types";
 import { fmtTime } from "../lib/format";
@@ -12,6 +12,17 @@ interface Props {
 export function ProjectsPanel({ currentId, onOpen, refreshKey }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const importFile = async (f: File) => {
+    setError(null);
+    try {
+      const p = await api.importProject(f);
+      await load();
+      onOpen(p.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const load = () => api.listProjects().then(setProjects).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [refreshKey, currentId]);
@@ -32,7 +43,12 @@ export function ProjectsPanel({ currentId, onOpen, refreshKey }: Props) {
     <aside className="projects">
       <header>
         <h2>Proyectos</h2>
-        <button className="btn primary small" onClick={create}>+ Nuevo</button>
+        <div className="row gap-s">
+          <button className="btn ghost small" title="Abrir un proyecto .json guardado" onClick={() => fileRef.current?.click()}>Importar</button>
+          <button className="btn primary small" onClick={create}>+ Nuevo</button>
+        </div>
+        <input ref={fileRef} type="file" accept=".json,application/json" hidden
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
       </header>
       {error && <p className="error small">{error}</p>}
       <ul>
@@ -41,6 +57,7 @@ export function ProjectsPanel({ currentId, onOpen, refreshKey }: Props) {
             <div className="p-name">{p.name}</div>
             <div className="p-meta">
               {p.doc.media ? `${p.doc.media.file_name} · ${fmtTime(p.doc.media.duration, false)}` : "Sin video"}
+              {p.media_available === false && <span className="error"> · video no encontrado</span>}
             </div>
             <div className="p-meta">{new Date(p.updated_at * 1000).toLocaleString("es")}</div>
             <button className="p-del" title="Borrar proyecto" onClick={(e) => { e.stopPropagation(); remove(p); }}>✕</button>

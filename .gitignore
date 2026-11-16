@@ -9,3 +9,6 @@ frontend/dist/
 *.mov
 *.mkv
 .DS_Store
+
+build/
+dist/

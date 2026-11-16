@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import type { ProjectDoc } from "../api/types";
 import { fmtTime } from "../lib/format";
-import { keepSegments, outputDuration, toOutput } from "../lib/timemap";
+import { editSegments } from "../lib/joins";
+import { outputDuration, toOutput } from "../lib/timemap";
 
 interface Props {
   doc: ProjectDoc;
@@ -15,7 +16,7 @@ interface Props {
 export function Transport({ doc, videoRef, currentTime, playing, applyCuts, setApplyCuts }: Props) {
   const dur = doc.media?.duration ?? 0;
   const fps = doc.media?.fps || 30;
-  const segs = useMemo(() => keepSegments(doc.cuts, dur), [doc.cuts, dur]);
+  const segs = useMemo(() => editSegments(doc.cuts, dur), [doc.cuts, dur]);
   const outDur = outputDuration(segs);
   const outT = toOutput(segs, currentTime);
 

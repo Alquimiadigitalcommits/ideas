@@ -13,13 +13,23 @@ export interface MediaInfo {
   rotation: number;
 }
 
+export type TransitionType = "none" | "fade" | "dissolve" | "zoom" | "blur" | "slide" | "flash";
+
+export interface Transition {
+  type: TransitionType;
+  duration: number;
+  intensity: number;
+  direction: "left" | "right" | "up" | "down";
+}
+
 export interface Cut {
   id: string;
   start: number;
   end: number;
-  kind: "silence" | "manual";
+  kind: "silence" | "manual" | "split";
   enabled: boolean;
   reason: string;
+  transition?: Transition | null;
 }
 
 export interface Word {
@@ -52,6 +62,7 @@ export interface SubtitleStyle {
   shadow: number;
   shadow_color: string;
   position_y: number;
+  animation: "none" | "pop" | "fade" | "slide" | "typewriter";
   max_words: number;
   max_chars: number;
 }
@@ -64,6 +75,32 @@ export interface FormatSettings {
   offset_x: number;
   offset_y: number;
   zoom: number;
+  track_enabled: boolean;
+  track: [number, number, number][];
+  jump_zoom: number;
+}
+
+export interface MusicTrack {
+  path: string;
+  file_name: string;
+  duration: number;
+  volume_db: number;
+  start_offset: number;
+  loop: boolean;
+  fade_in: number;
+  fade_out: number;
+  ducking: boolean;
+  ducking_amount: number;
+}
+
+export interface AudioSettings {
+  voice_gain_db: number;
+  denoise: boolean;
+  denoise_strength: number;
+  highpass: boolean;
+  fade_in: number;
+  fade_out: number;
+  music: MusicTrack | null;
 }
 
 export interface AutoEditSettings {
@@ -85,6 +122,9 @@ export interface ProjectDoc {
   subtitle_style: SubtitleStyle;
   format: FormatSettings;
   autoedit: AutoEditSettings;
+  transition_default: Transition;
+  scenes: number[];
+  audio: AudioSettings;
 }
 
 export interface Project {
@@ -94,6 +134,7 @@ export interface Project {
   updated_at: number;
   rev: number;
   doc: ProjectDoc;
+  media_available?: boolean | null;
 }
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "canceled";

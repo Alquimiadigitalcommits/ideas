@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Caption, Cut, ProjectDoc } from "../api/types";
 import { fmtTime } from "../lib/format";
+import { computeJoins, TRANSITION_LABEL } from "../lib/joins";
 
 interface Props {
   projectId: string;
@@ -38,6 +39,15 @@ export function Timeline(p: Props) {
   const [wave, setWave] = useState<{ pps: number; peaks: number[] } | null>(null);
   const [thumbs, setThumbs] = useState<{ count: number; interval: number; tile_width: number; tile_height: number } | null>(null);
   const [drag, setDrag] = useState<Drag>(null);
+  const [snap, setSnap] = useState(true);
+  const joins = useMemo(() => computeJoins(doc), [doc]);
+  // puntos de imán: bordes de palabras, cambios de escena y bordes de otros cortes
+  const snapPoints = useMemo(() => {
+    const pts: number[] = [...doc.scenes];
+    for (const c of doc.captions) for (const w of c.words) pts.push(w.start, w.end);
+    for (const c of doc.cuts) pts.push(c.start, c.end);
+    return pts.sort((a, b) => a - b);
+  }, [doc.scenes, doc.captions, doc.cuts]);
 
   const fitPps = dur > 0 ? Math.max(0.02, (vw - 4) / dur) : 50;
   const pps = zoom === 0 ? fitPps : Math.max(fitPps, zoom);
@@ -104,7 +114,18 @@ export function Timeline(p: Props) {
   useEffect(() => {
     if (!drag) return;
     const move = (e: PointerEvent) => {
-      const t = xToTime(e.clientX);
+      let t = xToTime(e.clientX);
+      if (snap && !e.altKey) {
+        const tol = 8 / pps;
+        let best = tol;
+        for (const c of [...snapPoints, p.currentTime]) {
+          const d = Math.abs(c - t);
+          if (d < best && !doc.cuts.some((x) => x.id === drag.id && (Math.abs(x.start - c) < 1e-6 || Math.abs(x.end - c) < 1e-6))) {
+            best = d;
+            t = c;
+          }
+        }
+      }
       p.updateCuts((cuts) => cuts.map((c) => {
         if (c.id !== drag.id) return c;
         if (drag.edge === "start") return { ...c, start: Math.min(t, c.end - 0.05) };
@@ -118,7 +139,7 @@ export function Timeline(p: Props) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [drag, xToTime]);
+  }, [drag, xToTime, snap, snapPoints, pps]);
 
   const ticks = useMemo(() => {
     const steps = [0.1, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
@@ -128,7 +149,10 @@ export function Timeline(p: Props) {
     return { step, out };
   }, [t0, t1, pps, dur]);
 
-  const visibleCuts = doc.cuts.filter((c) => c.end >= t0 - 1 && c.start <= t1 + 1);
+  const visibleCuts = doc.cuts.filter((c) => c.kind !== "split" && c.end >= t0 - 1 && c.start <= t1 + 1);
+  const visibleSplits = doc.cuts.filter((c) => c.kind === "split" && c.start >= t0 - 1 && c.start <= t1 + 1);
+  const visibleScenes = doc.scenes.filter((t) => t >= t0 - 1 && t <= t1 + 1);
+  const visibleJoins = joins.filter((j) => j.src >= t0 - 1 && j.src <= t1 + 1);
   const visibleCaps: Caption[] = doc.captions.filter((c) => c.end >= t0 - 1 && c.start <= t1 + 1);
 
   const thumbTiles = useMemo(() => {
@@ -159,8 +183,10 @@ export function Timeline(p: Props) {
         <input type="range" min={0} max={300} step={1} value={zoom === 0 ? 0 : Math.min(300, zoom)}
           onChange={(e) => setZoom(Number(e.target.value))} />
         <button className="btn ghost small" onClick={() => setZoom(0)}>Ajustar</button>
+        <button className={"btn small " + (snap ? "accent" : "ghost")} title="Imán: ajusta los bordes a palabras, escenas y cabezal (Alt lo desactiva al arrastrar)"
+          onClick={() => setSnap(!snap)}>🧲 Imán</button>
         <span className="muted small">
-          Doble clic en un corte = recuperar/cortar · arrastra sus bordes · I/O marcan un rango
+          Doble clic en un corte = recuperar/cortar · I/O/X = cortar rango · S = dividir · ◆ = transición
         </span>
       </div>
       <div className="timeline-body">
@@ -218,6 +244,23 @@ export function Timeline(p: Props) {
                 <div className="cut-handle l" onPointerDown={(e) => { e.stopPropagation(); p.setSelectedCut(c.id); setDrag({ id: c.id, edge: "start" }); }} />
                 <div className="cut-handle r" onPointerDown={(e) => { e.stopPropagation(); p.setSelectedCut(c.id); setDrag({ id: c.id, edge: "end" }); }} />
               </div>
+            ))}
+            {/* cambios de escena */}
+            {visibleScenes.map((t) => (
+              <div key={`sc${t}`} className="scene-marker" style={{ left: t * pps, height: totalH }} title={`Cambio de escena ${fmtTime(t)}`} />
+            ))}
+            {/* divisiones */}
+            {visibleSplits.map((c) => (
+              <div key={c.id} className={"split-marker" + (c.id === p.selectedCut ? " selected" : "")}
+                style={{ left: c.start * pps, top: RULER_H, height: V_H + A_H + S_H }} title={`División ${fmtTime(c.start)}`}
+                onPointerDown={(e) => { e.stopPropagation(); p.setSelectedCut(c.id); }} />
+            ))}
+            {/* uniones con transición */}
+            {visibleJoins.map((j) => (
+              <div key={`j${j.index}`} className={"join-marker" + (j.trans ? " has" : "") + (j.owner && j.owner.id === p.selectedCut ? " selected" : "")}
+                style={{ left: j.src * pps }}
+                title={`${j.trans ? TRANSITION_LABEL[j.trans.type] + " · " + j.trans.duration.toFixed(2) + " s" : "Corte seco"}${j.overrides ? " (individual)" : ""}`}
+                onPointerDown={(e) => { e.stopPropagation(); if (j.owner) p.setSelectedCut(j.owner.id); p.onSeek(j.src); }}>◆</div>
             ))}
             {/* rango marcado */}
             {p.markIn !== null && (

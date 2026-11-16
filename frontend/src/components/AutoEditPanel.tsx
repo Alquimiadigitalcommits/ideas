@@ -20,7 +20,8 @@ export function AutoEditPanel({ doc, updateDoc, runAutoEdit, running, onSeek, se
   const setCuts = (fn: (c: Cut[]) => Cut[]) => updateDoc((d) => ({ ...d, cuts: fn(d.cuts) }));
   const dur = doc.media?.duration ?? 0;
   const outDur = useMemo(() => outputDuration(keepSegments(doc.cuts, dur)), [doc.cuts, dur]);
-  const activeCount = doc.cuts.filter((c) => c.enabled).length;
+  const realCuts = doc.cuts.filter((c) => c.kind !== "split");   // las divisiones se gestionan en Transiciones
+  const activeCount = realCuts.filter((c) => c.enabled).length;
 
   return (
     <div className="panel-scroll">
@@ -42,10 +43,10 @@ export function AutoEditPanel({ doc, updateDoc, runAutoEdit, running, onSeek, se
         {!doc.captions.length && <small className="hint">Tip: transcribe primero para preservar frases completas.</small>}
       </Section>
 
-      <Section title={`Cortes (${activeCount} activos de ${doc.cuts.length})`}
-        right={doc.cuts.length > 0 && (
+      <Section title={`Cortes (${activeCount} activos de ${realCuts.length})`}
+        right={realCuts.length > 0 && (
           <div className="row gap-s">
-            <button className="btn ghost small" onClick={() => setCuts((c) => c.map((x) => ({ ...x, enabled: false })))}>Recuperar todos</button>
+            <button className="btn ghost small" onClick={() => setCuts((c) => c.map((x) => (x.kind === "split" ? x : { ...x, enabled: false })))}>Recuperar todos</button>
             <button className="btn ghost small" onClick={() => setCuts((c) => c.map((x) => ({ ...x, enabled: true })))}>Activar todos</button>
           </div>
         )}>
@@ -54,9 +55,9 @@ export function AutoEditPanel({ doc, updateDoc, runAutoEdit, running, onSeek, se
           <div><b>{fmtTime(outDur)}</b><span>resultado</span></div>
           <div><b>−{fmtTime(dur - outDur)}</b><span>eliminado</span></div>
         </div>
-        {doc.cuts.length === 0 && <p className="muted small">Sin cortes. Usa la detección automática o marca un rango con I / O en la línea de tiempo.</p>}
+        {realCuts.length === 0 && <p className="muted small">Sin cortes. Usa la detección automática o marca un rango con I / O en la línea de tiempo.</p>}
         <ul className="cut-list">
-          {doc.cuts.map((c) => (
+          {realCuts.map((c) => (
             <li key={c.id} className={(c.enabled ? "" : "off ") + (c.id === selectedCut ? "selected" : "")}
               onClick={() => { setSelectedCut(c.id); onSeek(Math.max(0, c.start - 0.8)); }}>
               <span className={`badge ${c.kind}`}>{c.kind === "manual" ? "manual" : "silencio"}</span>
