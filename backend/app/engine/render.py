@@ -78,10 +78,12 @@ def build_filter_script(doc: ProjectDoc, req: ExportRequest, rp: RenderPlan, ass
     parts.append(f"[{last}]format=yuv420p[vout]")
 
     if m.has_audio:
-        if req.normalize_audio:
-            parts.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
-        else:
-            parts.append("[ac]anull[aout]")
+        # Tras el concat el audio es continuo por diseño: se regeneran las marcas de tiempo por
+        # conteo de muestras (loudnorm puede introducir saltos) y se fija la duración exacta del
+        # video, rellenando o recortando lo que falte o sobre.
+        norm = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000," if req.normalize_audio else ""
+        d = f"{rp.duration:.6f}"
+        parts.append(f"[ac]{norm}asetpts=N/SR/TB,apad=whole_dur={d},atrim=end={d}[aout]")
     return ";\n".join(parts)
 
 

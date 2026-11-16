@@ -85,3 +85,28 @@ def test_many_segments(tone_video, tmp_path):
     assert v == pytest.approx(expected, abs=0.07)
     assert abs(v - a) < 0.07
     assert res["segments"] == 41
+
+
+def _audio_packet_gaps(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "packet=pts_time",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.split()
+    pts = [float(x.strip(",")) for x in out]
+    return max(b - a for a, b in zip(pts, pts[1:]))
+
+
+@pytest.mark.parametrize("normalize", [False, True])
+def test_speech_cuts_sync_and_continuous_audio(speech_video, tmp_path, normalize):
+    """Regresión: loudnorm tras concat introducía saltos de ~80 ms en las marcas de tiempo del audio."""
+    from app.engine import autoedit, silence
+    from app.schemas import AutoEditSettings
+    info = media.probe(str(speech_video))
+    cuts = autoedit.compute_cuts(silence.detect_silences(info, -35, 0.6), [], info.duration, AutoEditSettings())
+    doc = ProjectDoc(media=info, cuts=cuts, format=FormatSettings(aspect="9:16"))
+    req = ExportRequest(profile="tiktok", preset="ultrafast", crf=34, width=540, height=960,
+                        normalize_audio=normalize, write_srt=False)
+    res = render.export(doc, req, tmp_path, "s")
+    d = stream_durations(tmp_path / "s.mp4")
+    v, a = float(d["video"]["duration"]), float(d["audio"]["duration"])
+    assert v == pytest.approx(res["duration"], abs=0.034)
+    assert abs(v - a) < 0.01
+    assert _audio_packet_gaps(tmp_path / "s.mp4") < 0.03
