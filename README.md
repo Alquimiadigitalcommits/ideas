@@ -5,6 +5,8 @@ genera subtítulos editables con estilo y exporta para TikTok, Reels, Shorts y Y
 
 Estado: **MVP (etapa 1)**. Diseño completo, riesgos y plan de etapas en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 
+![Editor](docs/captura-editor.png)
+
 ## Requisitos
 
 | Herramienta | Versión probada | Para qué |
