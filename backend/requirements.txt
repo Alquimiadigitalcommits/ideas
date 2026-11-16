@@ -3,6 +3,9 @@ uvicorn[standard]>=0.30
 python-multipart>=0.0.9
 pydantic>=2.7
 faster-whisper>=1.1
+scenedetect>=0.6
+opencv-python-headless>=4.8,<5   # OpenCV 5 ya no incluye los clasificadores de rostro
 # tests
 pytest>=8
 httpx>=0.27
+scikit-image>=0.22   # solo tests: foto con rostro para el test de seguimiento

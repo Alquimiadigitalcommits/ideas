@@ -22,13 +22,25 @@ class MediaInfo(BaseModel):
     rotation: int = 0
 
 
+TransitionType = Literal["none", "fade", "dissolve", "zoom", "blur", "slide", "flash"]
+
+
+class Transition(BaseModel):
+    type: TransitionType = "none"
+    duration: float = 0.4          # s totales (mitad antes y mitad después de la unión)
+    intensity: float = 1.0         # 0..1 (fundido, flash, zoom, desenfoque)
+    direction: Literal["left", "right", "up", "down"] = "left"  # deslizamiento
+
+
 class Cut(BaseModel):
+    """Corte (start < end) o división (kind='split', start == end) que solo crea una unión."""
     id: str
     start: float
     end: float
-    kind: Literal["silence", "manual"] = "silence"
+    kind: Literal["silence", "manual", "split"] = "silence"
     enabled: bool = True
     reason: str = ""
+    transition: Optional[Transition] = None   # None = usa la transición por defecto
 
 
 class Word(BaseModel):
@@ -61,6 +73,7 @@ class SubtitleStyle(BaseModel):
     shadow: float = 2.0
     shadow_color: str = "#000000"
     position_y: float = 0.78     # 0 = arriba, 1 = abajo (centro de la línea)
+    animation: Literal["none", "pop", "fade", "slide", "typewriter"] = "none"
     max_words: int = 4           # palabras por bloque al agrupar
     max_chars: int = 28
 
@@ -71,6 +84,9 @@ class FormatSettings(BaseModel):
     offset_x: float = 0.5        # 0 = izquierda, 1 = derecha (solo en crop)
     offset_y: float = 0.5
     zoom: float = 1.0
+    track_enabled: bool = False             # reencuadre siguiendo el rostro (solo en crop)
+    track: list[list[float]] = Field(default_factory=list)  # [t_fuente, centro_x, centro_y] normalizados
+    jump_zoom: float = 0.0                  # zoom alternado por segmento (0 = desactivado, 0.15 = 15 %)
 
 
 class AutoEditSettings(BaseModel):
@@ -80,6 +96,29 @@ class AutoEditSettings(BaseModel):
     mid_sentence_padding: float = 0.25  # más aire si la frase continúa
     min_keep: float = 0.25        # segmentos conservados más cortos se fusionan
     protect_words: bool = True    # nunca cortar encima de una palabra transcrita
+
+
+class MusicTrack(BaseModel):
+    path: str
+    file_name: str
+    duration: float
+    volume_db: float = -16.0
+    start_offset: float = 0.0     # segundo de la canción donde empieza
+    loop: bool = True
+    fade_in: float = 1.0
+    fade_out: float = 2.0
+    ducking: bool = True
+    ducking_amount: float = 0.6   # 0..1 (cuánto baja la música cuando hay voz)
+
+
+class AudioSettings(BaseModel):
+    voice_gain_db: float = 0.0
+    denoise: bool = False
+    denoise_strength: float = 0.5     # 0..1
+    highpass: bool = False            # quita graves por debajo de 80 Hz (ruido de manejo, aire acondicionado)
+    fade_in: float = 0.0              # fundido de entrada del resultado (audio y video)
+    fade_out: float = 0.0
+    music: Optional[MusicTrack] = None
 
 
 class ProjectDoc(BaseModel):
@@ -92,6 +131,9 @@ class ProjectDoc(BaseModel):
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
     format: FormatSettings = Field(default_factory=FormatSettings)
     autoedit: AutoEditSettings = Field(default_factory=AutoEditSettings)
+    transition_default: Transition = Field(default_factory=Transition)
+    scenes: list[float] = Field(default_factory=list)   # cambios de escena (s, tiempo fuente)
+    audio: AudioSettings = Field(default_factory=AudioSettings)
 
 
 class Project(BaseModel):
@@ -101,6 +143,7 @@ class Project(BaseModel):
     updated_at: float
     rev: int
     doc: ProjectDoc
+    media_available: Optional[bool] = None   # calculado: ¿existe aún el archivo original?
 
 
 class ExportRequest(BaseModel):

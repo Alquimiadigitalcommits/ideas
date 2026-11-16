@@ -124,3 +124,83 @@ def test_upload_and_cancel_export(tone_video):
     assert j["status"] == "canceled"
     names = [e["name"] for e in client.get(f"/api/projects/{pid}/exports").json()]
     assert not any(n.endswith(".mp4") for n in names)  # sin archivos a medias
+
+
+def _new_with_video(path, name="P"):
+    pid = client.post("/api/projects", json={"name": name}).json()["id"]
+    j = client.post(f"/api/projects/{pid}/import-path", json={"path": str(path)}).json()
+    assert wait(j["id"])["status"] == "done"
+    return pid
+
+
+def test_scenes_and_facetrack_jobs(scene_video, face_video):
+    pid = _new_with_video(scene_video, "Escenas")
+    j = wait(client.post(f"/api/projects/{pid}/scenes", json={}).json()["id"])
+    assert j["status"] == "done" and j["result"]["scenes"] == 2
+    assert len(client.get(f"/api/projects/{pid}").json()["doc"]["scenes"]) == 2
+    # sin rostros: error claro
+    j = wait(client.post(f"/api/projects/{pid}/facetrack").json()["id"])
+    assert j["status"] == "failed" and "rostro" in j["error"]
+
+    pid = _new_with_video(face_video, "Rostro")
+    j = wait(client.post(f"/api/projects/{pid}/facetrack").json()["id"])
+    assert j["status"] == "done" and j["result"]["detection_rate"] > 0.8
+    fmt = client.get(f"/api/projects/{pid}").json()["doc"]["format"]
+    assert fmt["track_enabled"] and len(fmt["track"]) >= 2
+
+
+def test_music_upload_and_preview_clip(tone_video, music_file):
+    pid = _new_with_video(tone_video, "Música")
+    r = client.post(f"/api/projects/{pid}/music", files={"file": ("cancion.wav", music_file.read_bytes(), "audio/wav")})
+    assert r.status_code == 200 and r.json()["doc"]["audio"]["music"]["duration"] == pytest.approx(5, abs=0.1)
+    assert client.get(f"/api/projects/{pid}/media/music").status_code == 200
+    bad = client.post(f"/api/projects/{pid}/music", files={"file": ("x.txt", b"hola", "text/plain")})
+    assert bad.status_code == 400
+
+    # transición por defecto + previsualización exacta de 2 s alrededor de una unión
+    proj = client.get(f"/api/projects/{pid}").json()
+    doc = proj["doc"]
+    doc["cuts"] = [{"id": "c1", "start": 2.0, "end": 4.0, "kind": "manual", "enabled": True, "reason": ""}]
+    doc["transition_default"] = {"type": "dissolve", "duration": 0.5, "intensity": 1, "direction": "left"}
+    assert client.put(f"/api/projects/{pid}", json={"rev": proj["rev"], "doc": doc}).status_code == 200
+    j = wait(client.post(f"/api/projects/{pid}/preview-clip", json={"center": 2.0, "span": 2.0}).json()["id"])
+    assert j["status"] == "done", j
+    assert j["result"]["duration"] == pytest.approx(2.0, abs=0.05) and j["result"]["transitions"] == 1
+    assert client.get(f"/api/projects/{pid}/previews/{j['result']['video']}").status_code == 200
+
+    r = client.delete(f"/api/projects/{pid}/music")
+    assert r.json()["doc"]["audio"]["music"] is None
+    assert not music_file.with_name("x").exists() and music_file.exists()   # el archivo del usuario sigue ahí
+
+
+def test_import_project_and_relink(tone_video, tmp_path):
+    import shutil
+    copy = tmp_path / "copia.mov"
+    shutil.copy(tone_video, copy)
+    pid = _new_with_video(copy, "Original")
+    proj = client.get(f"/api/projects/{pid}").json()
+    proj["doc"]["cuts"] = [{"id": "c1", "start": 1, "end": 2, "kind": "manual", "enabled": True, "reason": ""}]
+    client.put(f"/api/projects/{pid}", json={"rev": proj["rev"], "doc": proj["doc"]})
+    exported = client.get(f"/api/projects/{pid}/project-file").content
+
+    copy.unlink()   # el video "se movió"
+    assert client.get(f"/api/projects/{pid}").json()["media_available"] is False
+
+    r = client.post("/api/projects/import", files={"file": ("mi.svep.json", exported, "application/json")})
+    assert r.status_code == 200
+    new = r.json()
+    assert new["id"] != pid and new["media_available"] is False and len(new["doc"]["cuts"]) == 1
+
+    # reconectar al mismo video en otra ubicación conserva los cortes
+    j = client.post(f"/api/projects/{new['id']}/relink", json={"path": str(tone_video)}).json()
+    assert wait(j["id"])["status"] == "done"
+    after = client.get(f"/api/projects/{new['id']}").json()
+    assert after["media_available"] and len(after["doc"]["cuts"]) == 1 and after["doc"]["proxy_ready"]
+
+    # otro video con distinta duración: se rechaza salvo que se fuerce
+    other = tmp_path / "otro.mp4"
+    import subprocess
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x240:r=25:d=3",
+                    "-pix_fmt", "yuv420p", str(other)], check=True)
+    assert client.post(f"/api/projects/{new['id']}/relink", json={"path": str(other)}).status_code == 409
+    assert client.post("/api/projects/import", files={"file": ("x.json", b"{malo", "application/json")}).status_code == 400

@@ -14,19 +14,24 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel
 
 from .. import config, db
-from ..engine import autoedit, ffmpeg, media, render, silence, subtitles, transcribe
+from ..engine import autoedit, facetrack, ffmpeg, media, render, scenes, silence, subtitles, transcribe
 from ..engine.timeline import TimeMap, keep_segments
 from ..jobs import Canceled, JobContext, manager
-from ..schemas import AutoEditSettings, ExportRequest, Job, Project, ProjectDoc, TranscribeRequest
+from ..schemas import AutoEditSettings, ExportRequest, Job, MusicTrack, Project, ProjectDoc, TranscribeRequest
 
 router = APIRouter(prefix="/api")
+
+
+def _with_status(p: Project) -> Project:
+    p.media_available = bool(p.doc.media and os.path.isfile(p.doc.media.source_path)) if p.doc.media else None
+    return p
 
 
 def _get(pid: str) -> Project:
     p = db.get_project(pid)
     if p is None:
         raise HTTPException(404, "Proyecto no encontrado")
-    return p
+    return _with_status(p)
 
 
 def _require_media(p: Project):
@@ -66,7 +71,7 @@ class SaveProject(BaseModel):
 
 @router.get("/projects", response_model=list[Project])
 def list_projects():
-    return db.list_projects()
+    return [_with_status(p) for p in db.list_projects()]
 
 
 @router.post("/projects", response_model=Project)
@@ -83,7 +88,7 @@ def get_project(pid: str):
 def save_project(pid: str, body: SaveProject):
     _get(pid)
     try:
-        return db.save_project(pid, body.doc, expected_rev=body.rev, name=body.name)
+        return _with_status(db.save_project(pid, body.doc, expected_rev=body.rev, name=body.name))
     except db.RevisionConflict as c:
         return JSONResponse(status_code=409, content={
             "detail": "El proyecto cambió en el servidor", "project": json.loads(c.current.model_dump_json())})
@@ -333,3 +338,210 @@ def download_export(pid: str, name: str):
     if not path.is_file():
         raise HTTPException(404, "No existe")
     return FileResponse(path, filename=name)
+
+
+# ------------------------------------------------------------------ análisis visual (etapa 3)
+
+def _analysis_source(pid: str, p: Project) -> str:
+    """El proxy (≤720p) es más rápido de analizar y tiene la misma línea de tiempo que el original."""
+    proxy = config.project_dir(pid) / "proxy.mp4"
+    return str(proxy) if p.doc.proxy_ready and proxy.is_file() else p.doc.media.source_path  # type: ignore[union-attr]
+
+
+class ScenesRequest(BaseModel):
+    threshold: float = 27.0
+    min_scene_len: float = 0.6
+
+
+@router.post("/projects/{pid}/scenes", response_model=Job)
+def start_scenes(pid: str, body: ScenesRequest):
+    p = _get(pid)
+    info = _require_media(p)
+    _ensure_single(pid, "scenes")
+    src = _analysis_source(pid, p)
+
+    def run(ctx: JobContext):
+        ctx.progress(0.0, "Detectando cambios de escena")
+        found = scenes.detect_scenes(src, info.duration, body.threshold, body.min_scene_len,
+                                     on_progress=ctx.progress, cancel_event=ctx.cancel_event)
+        db.update_doc(pid, lambda d: setattr(d, "scenes", found))
+        return {"scenes": len(found)}
+
+    return manager.submit(pid, "scenes", _wrap_cancel(run), "Detección de escenas en cola")
+
+
+@router.post("/projects/{pid}/facetrack", response_model=Job)
+def start_facetrack(pid: str):
+    p = _get(pid)
+    info = _require_media(p)
+    _ensure_single(pid, "facetrack")
+    src = _analysis_source(pid, p)
+
+    def run(ctx: JobContext):
+        ctx.progress(0.0, "Buscando rostros")
+        res = facetrack.track_faces(src, info.duration, on_progress=ctx.progress, cancel_event=ctx.cancel_event)
+        if not res["track"]:
+            raise RuntimeError("No se detectaron rostros frontales en el video")
+
+        def mutate(d: ProjectDoc):
+            d.format.track = res["track"]
+            d.format.track_enabled = True
+            d.format.mode = "crop"
+
+        db.update_doc(pid, mutate)
+        return {"keyframes": len(res["track"]), "detection_rate": res["detection_rate"]}
+
+    return manager.submit(pid, "facetrack", _wrap_cancel(run), "Seguimiento de rostro en cola")
+
+
+# ------------------------------------------------------------------ música (etapa 5)
+
+MUSIC_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
+
+
+@router.post("/projects/{pid}/music", response_model=Project)
+async def upload_music(pid: str, file: UploadFile = File(...)):
+    _get(pid)
+    name = _SAFE.sub("_", os.path.basename(file.filename or "musica.mp3")).strip() or "musica.mp3"
+    if Path(name).suffix.lower() not in MUSIC_EXT:
+        raise HTTPException(400, "Formato de audio no soportado. Usa MP3, WAV, M4A, AAC, OGG, FLAC u OPUS.")
+    d = config.project_dir(pid) / "music"
+    d.mkdir(exist_ok=True)
+    dest = d / name
+    with open(dest, "wb") as out:
+        while chunk := await file.read(4 * 1024 * 1024):
+            out.write(chunk)
+    try:
+        data = ffmpeg.probe_json(str(dest))
+        if not any(st.get("codec_type") == "audio" for st in data.get("streams", [])):
+            raise ValueError("El archivo no contiene audio")
+        dur = float(data.get("format", {}).get("duration") or 0)
+        if dur <= 0:
+            raise ValueError("No se pudo leer la duración del audio")
+    except (ValueError, ffmpeg.FFmpegError) as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+
+    def mutate(doc: ProjectDoc):
+        prev = doc.audio.music
+        keep = prev.model_dump(exclude={"path", "file_name", "duration"}) if prev else {}
+        doc.audio.music = MusicTrack(path=str(dest), file_name=name, duration=dur, **keep)
+
+    return _with_status(db.update_doc(pid, mutate))
+
+
+@router.delete("/projects/{pid}/music", response_model=Project)
+def delete_music(pid: str):
+    p = _get(pid)
+    if p.doc.audio.music:
+        mpath = Path(p.doc.audio.music.path)
+        if config.PROJECTS_DIR in mpath.parents:   # solo se borra la copia del proyecto
+            mpath.unlink(missing_ok=True)
+    return _with_status(db.update_doc(pid, lambda d: setattr(d.audio, "music", None)))
+
+
+@router.get("/projects/{pid}/media/music")
+def music_file(pid: str):
+    p = _get(pid)
+    m = p.doc.audio.music
+    if not m or not os.path.isfile(m.path):
+        raise HTTPException(404, "Sin música")
+    return FileResponse(m.path)
+
+
+# ------------------------------------------------------------------ proyectos portables (etapa 2)
+
+@router.post("/projects/import", response_model=Project)
+async def import_project(file: UploadFile = File(...)):
+    raw = await file.read()
+    try:
+        data = json.loads(raw)
+        doc = ProjectDoc.model_validate(data["doc"] if isinstance(data, dict) and "doc" in data else data)
+        name = (data.get("name") if isinstance(data, dict) else None) or Path(file.filename or "Proyecto").stem
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"No es un proyecto válido: {str(e)[:300]}")
+    doc.proxy_ready = False
+    p = db.create_project(f"{name} (importado)".replace(".svep", ""))
+    p = db.save_project(p.id, doc)
+    if doc.media and os.path.isfile(doc.media.source_path):
+        manager.submit(p.id, "prepare", _prepare_job(p.id), "Preparando video")
+    return _with_status(p)
+
+
+class RelinkRequest(BaseModel):
+    path: str
+    force: bool = False
+
+
+@router.post("/projects/{pid}/relink", response_model=Job)
+def relink(pid: str, body: RelinkRequest):
+    """Apunta el proyecto a otra ubicación del mismo video conservando todas las ediciones."""
+    p = _get(pid)
+    if p.doc.media is None:
+        raise HTTPException(400, "El proyecto no tiene video; usa importar")
+    try:
+        info = media.probe(os.path.expanduser(body.path))
+    except (ValueError, FileNotFoundError, ffmpeg.FFmpegError) as e:
+        raise HTTPException(400, str(e))
+    old = p.doc.media.duration
+    if abs(info.duration - old) > 1.0 and not body.force:
+        raise HTTPException(409, f"La duración no coincide ({info.duration:.1f} s vs {old:.1f} s del proyecto). "
+                                 "Puede no ser el mismo video.")
+
+    def mutate(d: ProjectDoc):
+        d.media = info
+        d.proxy_ready = False
+
+    db.update_doc(pid, mutate)
+    pdir = config.project_dir(pid)
+    for f in ("proxy.mp4", "waveform.json", "thumbs.jpg", "thumbs.json", "audio16k.wav"):
+        (pdir / f).unlink(missing_ok=True)
+    return manager.submit(pid, "prepare", _prepare_job(pid), "Preparando video")
+
+
+# ------------------------------------------------------------------ previsualización exacta (etapa 4)
+
+class PreviewRequest(BaseModel):
+    center: float                 # tiempo de salida
+    span: float = 3.0             # duración total del tramo
+    short_side: int = 540
+
+
+@router.post("/projects/{pid}/preview-clip", response_model=Job)
+def start_preview(pid: str, body: PreviewRequest):
+    p = _get(pid)
+    _require_media(p)
+    span = max(0.5, min(20.0, body.span))
+    window = (body.center - span / 2, body.center + span / 2)
+    aspect = p.doc.format.aspect
+    from ..engine.reframe import output_size
+    w, h = output_size(aspect, body.short_side)
+    req = ExportRequest(profile="tiktok", width=w, height=h, preset="ultrafast", crf=26, write_srt=False)
+    try:
+        render.plan(p.doc, req, window)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    def run(ctx: JobContext):
+        cur = db.get_project(pid)
+        assert cur
+        out_dir = config.project_dir(pid) / "previews"
+        for old in out_dir.glob("preview_*"):
+            old.unlink(missing_ok=True)
+        base = f"preview_{int(time.time() * 1000)}"
+        res = render.export(cur.doc, req, out_dir, base, window=window,
+                            on_progress=ctx.progress, cancel_event=ctx.cancel_event)
+        res["start"] = round(max(0.0, window[0]), 3)
+        return res
+
+    return manager.submit(pid, "preview", _wrap_cancel(run), "Renderizando previsualización")
+
+
+@router.get("/projects/{pid}/previews/{name}")
+def preview_file(pid: str, name: str):
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "Nombre inválido")
+    path = config.project_dir(pid) / "previews" / name
+    if not path.is_file():
+        raise HTTPException(404, "No existe")
+    return FileResponse(path, media_type="video/mp4")

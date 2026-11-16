@@ -107,3 +107,25 @@ class TimeMap:
             if t_out <= off + (e - s) + 1e-9:
                 return s + max(0.0, t_out - off)
         return self.segments[-1][1] if self.segments else 0.0
+
+
+def edit_segments(cuts: Sequence, duration: float, fps: Optional[float] = None) -> list[Interval]:
+    """Segmentos conservados, además divididos en las divisiones (cortes de longitud cero).
+
+    Una división no quita material: solo crea una unión donde aplicar una transición.
+    """
+    segs = keep_segments(cuts, duration, fps)
+    points = sorted({_snap(c.start, fps) for c in cuts
+                     if getattr(c, "kind", "") == "split" and getattr(c, "enabled", True)})
+    if not points:
+        return segs
+    min_len = (1.0 / fps) if fps else 0.05
+    out: list[Interval] = []
+    for s, e in segs:
+        cur = s
+        for p in points:
+            if cur + min_len <= p <= e - min_len:
+                out.append((cur, p))
+                cur = p
+        out.append((cur, e))
+    return out

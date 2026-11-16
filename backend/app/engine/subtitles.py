@@ -169,31 +169,52 @@ Style: Main,{style.font_family},{size},{_ass_color(style.primary_color)},{_ass_c
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     x, y = width // 2, round(height * style.position_y)
-    pos = f"{{\\pos({x},{y})}}"
     hl = _ass_color(style.highlight_color)
-    events = []
+    anim = style.animation
+    dy = round(height * 0.035)
+    events: list[tuple[float, float, str]] = []
 
     def fmt(t: str) -> str:
         return _escape(t.upper() if style.uppercase else t)
 
+    def tags(first: bool, last: bool) -> str:
+        """Etiquetas de posición y animación de entrada/salida de la frase."""
+        t = f"\\pos({x},{y})"
+        if anim == "slide" and first:
+            t = f"\\move({x},{y + dy},{x},{y},0,180)\\fad(120,0)"
+        elif anim == "fade":
+            t += f"\\fad({150 if first else 0},{120 if last else 0})"
+        elif anim == "pop" and first and not style.highlight_words:
+            t += "\\fscx80\\fscy80\\t(0,140,\\fscx100\\fscy100)"
+        return "{" + t + "}"
+
     for c in cues:
-        if style.highlight_words and c.words:
-            # un evento por palabra: la palabra activa en color de resaltado
-            bounds = [c.start] + [w[0] for w in c.words[1:]] + [c.end]
-            if c.words[0][0] > c.start + 0.01:
-                events.append((c.start, c.words[0][0], pos + fmt(c.text)))
-            for i, w in enumerate(c.words):
-                s = max(c.start, w[0]) if i else max(c.start, min(w[0], bounds[1]))
-                e = bounds[i + 1] if i + 1 < len(bounds) else c.end
-                if e - s < 0.01:
-                    continue
-                parts = []
-                for j, ww in enumerate(c.words):
-                    t = fmt(ww[2])
-                    parts.append(f"{{\\c{hl}}}{t}{{\\r}}" if j == i else t)
-                events.append((s, e, pos + " ".join(parts)))
-        else:
-            events.append((c.start, c.end, pos + fmt(c.text)))
+        per_word = bool(c.words) and (style.highlight_words or anim == "typewriter")
+        if not per_word:
+            events.append((c.start, c.end, tags(True, True) + fmt(c.text)))
+            continue
+        # un evento por palabra: la activa resaltada; en "máquina de escribir" las futuras invisibles
+        bounds = [c.start] + [w[0] for w in c.words[1:]] + [c.end]
+        lead = c.words[0][0] > c.start + 0.01 and anim != "typewriter"
+        if lead:
+            events.append((c.start, c.words[0][0], tags(True, False) + fmt(c.text)))
+        n = len(c.words)
+        for i, w in enumerate(c.words):
+            s = max(c.start, w[0]) if i else c.start if not lead else max(c.start, w[0])
+            e = bounds[i + 1]
+            if e - s < 0.01:
+                continue
+            words_txt = []
+            for j, ww in enumerate(c.words):
+                t = fmt(ww[2])
+                if anim == "typewriter" and j > i:
+                    words_txt.append("{\\alpha&HFF&}" + t + "{\\r}")
+                elif j == i and style.highlight_words:
+                    pop = "\\fscx125\\fscy125\\t(0,120,\\fscx100\\fscy100)" if anim == "pop" else ""
+                    words_txt.append(f"{{\\c{hl}{pop}}}{t}{{\\r}}")
+                else:
+                    words_txt.append(t)
+            events.append((s, e, tags(i == 0 and not lead, i == n - 1) + " ".join(words_txt)))
 
     body = "\n".join(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Main,,0,0,0,,{t}" for s, e, t in events)
     return header + body + "\n"
