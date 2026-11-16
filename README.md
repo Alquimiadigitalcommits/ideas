@@ -20,7 +20,27 @@ Estado: **etapas 0 a 5 completas; etapa 6 parcial** (ejecutable autónomo listo,
 
 FFmpeg: en Windows `winget install Gyan.FFmpeg`; en macOS `brew install ffmpeg`; en Linux `apt install ffmpeg`.
 
-## Instalación
+## Instalación rápida (un comando)
+
+Descarga el proyecto (botón verde **Code → Download ZIP** en GitHub, o `git clone`) y, dentro de la carpeta:
+
+- **Windows 10/11** (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\instalar.ps1
+```
+
+- **macOS / Linux** (Terminal):
+
+```bash
+bash scripts/instalar.sh
+```
+
+El instalador revisa Python, Node y FFmpeg, instala los que falten (winget en Windows, Homebrew en macOS,
+apt en Linux), prepara todo y crea el lanzador: un acceso **Smart Video Editor** en el escritorio de Windows,
+o `iniciar.command` en macOS. Probado en Linux (41 s sobre un clon limpio); en Windows y macOS aún no se ha probado.
+
+## Instalación manual
 
 ```bash
 cd backend
