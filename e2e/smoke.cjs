@@ -19,7 +19,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   await page.getByRole("button", { name: "+ Nuevo" }).click();
   await page.getByText("Importa un video").waitFor();
   await shot(page, "01-importar");
-  await page.locator('input[type="file"]').setInputFiles(video);
+  await page.locator('input[type="file"][accept*=".mp4"]').setInputFiles(video);
   await page.locator("video.fg-video").waitFor({ timeout: 60000 });
   await page.waitForFunction(() => !document.querySelector(".job"), null, { timeout: 120000 });
   await page.waitForTimeout(800);

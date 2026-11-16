@@ -7,6 +7,8 @@ Estado: **etapas 0 a 5 completas; etapa 6 parcial** (ejecutable autónomo listo,
 
 ![Editor](docs/captura-editor.png)
 
+![Panel de audio con seguimiento de rostro en 9:16](docs/captura-etapas.png)
+
 ## Requisitos
 
 | Herramienta | Versión probada | Para qué |
@@ -180,4 +182,19 @@ Resultado actual: 72 tests de backend, 8 de frontend y las dos pruebas E2E en na
 
 ## Rendimiento con un video largo
 
-BENCH_PLACEHOLDER
+Video de 20 min 13 s (1280×720, 30 fps, 716 MB, voz con pausas reales) en una CPU de 4 núcleos sin GPU.
+Script: `scripts/bench_long.py`.
+
+| Etapa | Tiempo | Velocidad |
+|---|---|---|
+| Análisis (ffprobe) | 0,1 s | |
+| Miniaturas | 19,6 s | |
+| Forma de onda | 4,5 s | |
+| Proxy 720p | 182,6 s | 6,6× tiempo real |
+| Transcripción Whisper `base` (1.655 palabras) | 66,0 s | 18× tiempo real |
+| Detección de silencios + reglas de corte (208 cortes) | 4,1 s | |
+| Cambios de escena (sobre el proxy) | 46,3 s | |
+| Exportación 1080×1920, 207 segmentos, 206 transiciones, 529 subtítulos, normalización | 405,7 s | 2,2× tiempo real (salida de 14 min 36 s) |
+
+Sincronía del resultado: video 876,200 s, audio 876,166 s (1 fotograma de diferencia en 14,6 min).
+Al importar, el editor queda usable en ~3,5 min (proxy); la transcripción puede correr en paralelo.
