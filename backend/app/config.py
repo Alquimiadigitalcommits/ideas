@@ -43,10 +43,25 @@ FRONTEND_DIST = (Path(getattr(sys, "_MEIPASS", APP_DIR)) / "frontend_dist") if F
     else Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
+# Fuentes libres (SIL OFL) incluidas: el render (libass, vía fontsdir) y la vista previa (@font-face)
+# usan exactamente los mismos archivos en cualquier sistema operativo.
+FONTS_DIR = (Path(getattr(sys, "_MEIPASS", APP_DIR)) / "app" / "assets" / "fonts") if FROZEN \
+    else Path(__file__).resolve().parent / "assets" / "fonts"
+
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")   # Windows sin modo desarrollador
+
+
 def project_dir(project_id: str) -> Path:
+    # los ids los genera db.create_project (12 hex); cualquier otra cosa (p. ej. "../") se rechaza
+    if not (len(project_id) == 12 and all(c in "0123456789abcdef" for c in project_id)):
+        raise InvalidProjectId(project_id)
     d = PROJECTS_DIR / project_id
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+class InvalidProjectId(ValueError):
+    pass
 
 
 def ensure_workspace() -> None:

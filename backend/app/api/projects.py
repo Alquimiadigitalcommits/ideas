@@ -105,25 +105,42 @@ def delete_project(pid: str):
 
 # ------------------------------------------------------------------ importación
 
+def browser_playable(info) -> bool:
+    """El navegador reproduce el original directamente: H.264 en MP4/MOV y hasta 1080p."""
+    return (info.video_codec == "h264" and info.source_path.lower().endswith((".mp4", ".mov"))
+            and min(info.width, info.height) <= 1080 and info.rotation == 0)
+
+
+def prepare_assets(pid: str, ctx: JobContext, on_progress=None, force_proxy: bool = False) -> None:
+    p = db.get_project(pid)
+    assert p and p.doc.media
+    info = p.doc.media
+    pdir = config.project_dir(pid)
+    prog = on_progress or ctx.progress
+    prog(0.01)
+    if not (pdir / "thumbs.jpg").exists():
+        media.make_thumbnails(info, pdir, count=40, cancel_event=ctx.cancel_event)
+    prog(0.08)
+    if not (pdir / "waveform.json").exists():
+        media.make_waveform(info, pdir, cancel_event=ctx.cancel_event)
+    prog(0.15)
+    if force_proxy or not browser_playable(info):
+        # Solo hace falta si el navegador no puede reproducir el original (MKV, HEVC, ProRes, 4K):
+        # en un equipo modesto ahorra entre 3 y 15 minutos por video
+        media.make_proxy(info, pdir, cancel_event=ctx.cancel_event, on_progress=lambda f: prog(0.15 + 0.85 * f))
+    db.update_doc(pid, lambda d: setattr(d, "proxy_ready", True))
+    prog(1.0)
+
+
 def _prepare_job(pid: str):
     def run(ctx: JobContext):
-        p = db.get_project(pid)
-        assert p and p.doc.media
-        info = p.doc.media
-        pdir = config.project_dir(pid)
-        ctx.progress(0.01, "Generando miniaturas")
-        media.make_thumbnails(info, pdir, cancel_event=ctx.cancel_event)
-        ctx.progress(0.08, "Analizando forma de onda")
-        media.make_waveform(info, pdir, cancel_event=ctx.cancel_event)
-        ctx.progress(0.15, "Creando proxy de previsualización")
-        media.make_proxy(info, pdir, cancel_event=ctx.cancel_event,
-                         on_progress=lambda f: ctx.progress(0.15 + 0.85 * f))
-        db.update_doc(pid, lambda d: setattr(d, "proxy_ready", True))
+        ctx.progress(0.01, "Preparando vista previa")
+        prepare_assets(pid, ctx)
         return {"proxy": True}
     return _wrap_cancel(run)
 
 
-def _set_media(pid: str, path: str) -> Job:
+def _set_media(pid: str, path: str, prepare: bool = True) -> Optional[Job]:
     info = media.probe(path)
 
     def mutate(d: ProjectDoc):
@@ -139,14 +156,16 @@ def _set_media(pid: str, path: str) -> Job:
     pdir = config.project_dir(pid)
     for f in ("proxy.mp4", "waveform.json", "thumbs.jpg", "thumbs.json", "audio16k.wav"):
         (pdir / f).unlink(missing_ok=True)
+    if not prepare:
+        return None
     return manager.submit(pid, "prepare", _prepare_job(pid), "Preparando video")
 
 
 _SAFE = re.compile(r"[^\w.\- ]+", re.UNICODE)
 
 
-@router.post("/projects/{pid}/import", response_model=Job)
-async def import_upload(pid: str, file: UploadFile = File(...)):
+@router.post("/projects/{pid}/import", response_model=Optional[Job])
+async def import_upload(pid: str, file: UploadFile = File(...), prepare: bool = True):
     _get(pid)
     name = _SAFE.sub("_", os.path.basename(file.filename or "video.mp4")).strip() or "video.mp4"
     if Path(name).suffix.lower() not in config.ALLOWED_EXTENSIONS:
@@ -158,7 +177,7 @@ async def import_upload(pid: str, file: UploadFile = File(...)):
         while chunk := await file.read(8 * 1024 * 1024):
             out.write(chunk)
     try:
-        return _set_media(pid, str(dest))
+        return _set_media(pid, str(dest), prepare)
     except (ValueError, FileNotFoundError, ffmpeg.FFmpegError) as e:
         dest.unlink(missing_ok=True)
         raise HTTPException(400, str(e))
@@ -166,19 +185,68 @@ async def import_upload(pid: str, file: UploadFile = File(...)):
 
 class ImportPath(BaseModel):
     path: str
+    prepare: bool = True
 
 
-@router.post("/projects/{pid}/import-path", response_model=Job)
+@router.post("/projects/{pid}/import-path", response_model=Optional[Job])
 def import_path(pid: str, body: ImportPath):
     """Importa un archivo local sin copiarlo (se abre solo en lectura)."""
     _get(pid)
     try:
-        return _set_media(pid, os.path.expanduser(body.path))
+        return _set_media(pid, os.path.expanduser(body.path), body.prepare)
     except (ValueError, FileNotFoundError, ffmpeg.FFmpegError) as e:
         raise HTTPException(400, str(e))
 
 
 # ------------------------------------------------------------------ acciones
+
+def do_transcribe(pid: str, info, model: str, language: Optional[str], ctx: JobContext, prog) -> dict:
+    pdir = config.project_dir(pid)
+    prog(0.0, "Extrayendo audio")
+    wav = media.extract_audio_wav(info, pdir, cancel_event=ctx.cancel_event)
+    prog(0.05, f"Cargando el modelo de transcripción '{model}' (la primera vez se descarga)")
+    transcribe.get_model(model)
+    ctx.check()
+    prog(0.1, "Transcribiendo")
+    words, lang = transcribe.transcribe(str(wav), info.duration, model, language,
+                                        on_progress=lambda f: prog(0.1 + 0.9 * f),
+                                        cancel_event=ctx.cancel_event)
+
+    def mutate(d: ProjectDoc):
+        d.captions = subtitles.build_captions(words, d.subtitle_style.max_words, d.subtitle_style.max_chars)
+        d.language = lang
+
+    db.update_doc(pid, mutate)
+    return {"words": len(words), "language": lang}
+
+
+def do_autoedit(pid: str, info, settings: AutoEditSettings, ctx: JobContext, prog) -> dict:
+    prog(0.0, "Detectando silencios")
+    sil = silence.detect_silences(info, settings.noise_db, settings.min_silence,
+                                  on_progress=lambda f: prog(0.9 * f), cancel_event=ctx.cancel_event)
+    cur = db.get_project(pid)
+    assert cur
+    words = [w for c in cur.doc.captions for w in c.words]
+    cuts = autoedit.compute_cuts(sil, words, info.duration, settings)
+
+    def mutate(d: ProjectDoc):
+        d.cuts = [c for c in d.cuts if c.kind != "silence"] + cuts
+        d.cuts.sort(key=lambda c: c.start)
+        d.autoedit = settings
+
+    updated = db.update_doc(pid, mutate)
+    segs = keep_segments(updated.doc.cuts, info.duration)
+    out = sum(e - s for s, e in segs)
+    return {"silences": len(sil), "cuts": len(cuts), "used_words": bool(words),
+            "removed_seconds": round(info.duration - out, 2), "output_duration": round(out, 2)}
+
+
+def _stepper(ctx: JobContext, a: float, b: float):
+    """Progreso de un paso dentro del rango [a, b] del job."""
+    def prog(f: float, message: Optional[str] = None):
+        ctx.progress(a + (b - a) * max(0.0, min(1.0, f)), message)
+    return prog
+
 
 @router.post("/projects/{pid}/transcribe", response_model=Job)
 def start_transcribe(pid: str, body: TranscribeRequest):
@@ -188,26 +256,13 @@ def start_transcribe(pid: str, body: TranscribeRequest):
         raise HTTPException(400, "El video no tiene audio para transcribir")
     if body.model not in config.WHISPER_MODELS:
         raise HTTPException(400, f"Modelo no válido. Opciones: {', '.join(config.WHISPER_MODELS)}")
+    err = transcribe.import_error()
+    if err:
+        raise HTTPException(503, err)
     _ensure_single(pid, "transcribe")
 
     def run(ctx: JobContext):
-        pdir = config.project_dir(pid)
-        ctx.progress(0.01, "Extrayendo audio")
-        wav = media.extract_audio_wav(info, pdir, cancel_event=ctx.cancel_event)
-        ctx.progress(0.06, f"Cargando modelo Whisper '{body.model}' (la primera vez se descarga)")
-        transcribe.get_model(body.model)
-        ctx.check()
-        ctx.progress(0.1, "Transcribiendo")
-        words, lang = transcribe.transcribe(str(wav), info.duration, body.model, body.language,
-                                            on_progress=lambda f: ctx.progress(0.1 + 0.9 * f),
-                                            cancel_event=ctx.cancel_event)
-
-        def mutate(d: ProjectDoc):
-            d.captions = subtitles.build_captions(words, d.subtitle_style.max_words, d.subtitle_style.max_chars)
-            d.language = lang
-
-        db.update_doc(pid, mutate)
-        return {"words": len(words), "language": lang}
+        return do_transcribe(pid, info, body.model, body.language, ctx, _stepper(ctx, 0, 1))
 
     return manager.submit(pid, "transcribe", _wrap_cancel(run), "Transcripción en cola")
 
@@ -219,25 +274,7 @@ def start_autoedit(pid: str, body: AutoEditSettings):
     _ensure_single(pid, "autoedit")
 
     def run(ctx: JobContext):
-        ctx.progress(0.0, "Detectando silencios")
-        sil = silence.detect_silences(info, body.noise_db, body.min_silence,
-                                      on_progress=lambda f: ctx.progress(0.9 * f),
-                                      cancel_event=ctx.cancel_event)
-        cur = db.get_project(pid)
-        assert cur
-        words = [w for c in cur.doc.captions for w in c.words]
-        cuts = autoedit.compute_cuts(sil, words, info.duration, body)
-
-        def mutate(d: ProjectDoc):
-            d.cuts = [c for c in d.cuts if c.kind == "manual"] + cuts
-            d.cuts.sort(key=lambda c: c.start)
-            d.autoedit = body
-
-        updated = db.update_doc(pid, mutate)
-        segs = keep_segments(updated.doc.cuts, info.duration)
-        out = sum(e - s for s, e in segs)
-        return {"silences": len(sil), "cuts": len(cuts), "used_words": bool(words),
-                "removed_seconds": round(info.duration - out, 2), "output_duration": round(out, 2)}
+        return do_autoedit(pid, info, body, ctx, _stepper(ctx, 0, 1))
 
     return manager.submit(pid, "autoedit", _wrap_cancel(run), "Auto-edición en cola")
 
@@ -545,3 +582,14 @@ def preview_file(pid: str, name: str):
     if not path.is_file():
         raise HTTPException(404, "No existe")
     return FileResponse(path, media_type="video/mp4")
+
+
+@router.post("/projects/{pid}/prepare", response_model=Job)
+def start_prepare(pid: str):
+    _require_media(_get(pid))
+    existing = manager.active_for(pid, "prepare")
+    if existing:
+        j = db.get_job(existing)
+        assert j
+        return j
+    return manager.submit(pid, "prepare", _prepare_job(pid), "Preparando vista previa")

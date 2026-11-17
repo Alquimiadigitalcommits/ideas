@@ -337,7 +337,9 @@ def build_filter_script(doc: ProjectDoc, req: ExportRequest, rp: RenderPlan, ass
     fx, last = _effects(doc, rp, "vr", out_dir, base)
     parts += fx
     if ass_path is not None:
-        parts.append(f"[{last}]subtitles=filename='{_ff_escape_path(ass_path)}'[vsub]")
+        from .. import config
+        parts.append(f"[{last}]subtitles=filename='{_ff_escape_path(ass_path)}'"
+                     f":fontsdir='{_ff_escape_path(config.FONTS_DIR)}'[vsub]")
         last = "vsub"
     parts.append(f"[{last}]format=yuv420p[vout]")
 
