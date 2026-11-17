@@ -82,6 +82,9 @@ def track_faces(path: str, duration: float, *, samples_per_second: float = 4.0, 
                 raw.append((t, None, None))
             if on_progress and duration:
                 on_progress(min(0.999, t / duration))
+            # sin ningún rostro en las primeras 120 muestras (~30 s de video): no tiene sentido seguir
+            if len(raw) >= 120 and not any(r[1] is not None for r in raw):
+                break
         frame_i += 1
     cap.release()
 

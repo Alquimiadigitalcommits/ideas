@@ -263,4 +263,12 @@ Script: `scripts/bench_long.py`.
 | Exportación 1080×1920, 207 segmentos, 206 transiciones, 529 subtítulos, normalización | 405,7 s | 2,2× tiempo real (salida de 14 min 36 s) |
 
 Sincronía del resultado: video 876,200 s, audio 876,166 s (1 fotograma de diferencia en 14,6 min).
+
+**Modo automático con el mismo video** (perfil modesto, ritmo dinámico, 9:16): **10 min 49 s** de principio a fin.
+Análisis 30 s · transcripción 52 s · silencios 2 s (276 cortes, −6,5 min) · búsqueda de rostro 148 s · exportación 6 min 57 s
+(1080×1920, 13 min 44 s de salida, 529 subtítulos). Este video no tiene rostros: la búsqueda ahora se rinde tras ~30 s
+de video analizado, lo que deja el total en unos 8,5 min (estimado). Ya no se genera proxy: el original H.264 se reproduce directo.
+
+En un equipo como un Core i3-2100 (2 núcleos, sin AVX2) se espera entre 3 y 5 veces más tiempo: unos 30 a 45 min
+para un video de 20 min, y 1 a 3 min para un Reel de 1 min (estimación, no medido en ese equipo).
 Al importar, el editor queda usable en ~3,5 min (proxy); la transcripción puede correr en paralelo.

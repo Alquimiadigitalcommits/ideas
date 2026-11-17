@@ -115,3 +115,17 @@ def test_project_id_cannot_escape_workspace():
     for url in ["/api/projects/..%2F..%2Ftmp/exports/x.mp4", "/api/projects/..%2F..%2Fetc/previews/passwd",
                 "/api/projects/zzzzzzzzzzzz/exports"]:
         assert client.get(url).status_code == 404
+
+
+def test_facetrack_gives_up_quickly_without_faces(media_dir):
+    """Regresión: en un video de 20 min sin rostros el paso tardaba 148 s analizando todo."""
+    import subprocess
+    import time
+    from app.engine import facetrack
+    out = media_dir / "noface_long.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=640x360:r=25:d=120",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(out)], check=True)
+    t = time.time()
+    res = facetrack.track_faces(str(out), 120.0)
+    assert res["track"] == [] and res["samples"] <= 121
+    assert time.time() - t < 15
