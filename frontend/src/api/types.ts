@@ -160,9 +160,39 @@ export interface ExportProfile {
   audio_kbps: number;
 }
 
+export interface HardwareProfile {
+  threads: number;
+  ram_gb: number;
+  avx2: boolean;
+  tier: "modesto" | "normal";
+  whisper_model: string;
+  export_preset: string;
+}
+
+export interface BundledFont {
+  family: string;
+  weight: number;
+  file: string;
+  css_scale: number;
+}
+
+export interface AutoRequest {
+  platform: string;
+  remove_silences: boolean;
+  pace: "natural" | "dinamico";
+  subtitles: boolean;
+  burn_subtitles: boolean;
+  subtitle_style: SubtitleStyle | null;
+  face_track: boolean;
+  enhance_audio: boolean;
+  language: string | null;
+}
+
 export interface SystemInfo {
   ffmpeg: { ok: boolean; version: string | null };
   whisper: boolean;
+  whisper_error: string | null;
+  hardware: HardwareProfile;
   whisper_models: string[];
   default_whisper_model: string;
   profiles: Record<string, ExportProfile>;

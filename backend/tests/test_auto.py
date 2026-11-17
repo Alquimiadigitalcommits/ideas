@@ -43,6 +43,11 @@ def test_auto_creates_vertical_video_with_subtitles(speech_video):
     assert not (config.project_dir(pid) / "proxy.mp4").exists()
     assert client.get(f"/api/projects/{pid}/media/preview").status_code == 200
 
+    # otra plataforma con el mismo video: reutiliza la transcripción
+    j2 = wait(client.post(f"/api/projects/{pid}/auto", json={"platform": "youtube", "whisper_model": "tiny"}).json()["id"], 300)
+    assert j2["status"] == "done" and "transcribir" not in j2["result"]["steps"]
+    assert j2["result"]["export"]["width"] == 1920 and j2["result"]["export"]["cues"] > 3
+
 
 def test_auto_follows_face(face_video):
     pid, _ = _project(face_video)

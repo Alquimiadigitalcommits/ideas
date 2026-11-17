@@ -1,5 +1,5 @@
 import type {
-  AutoEditSettings, ExportFile, ExportRequest, Job, Project, ProjectDoc, SystemInfo,
+  AutoEditSettings, AutoRequest, BundledFont, ExportFile, ExportRequest, Job, Project, ProjectDoc, SystemInfo,
 } from "./types";
 
 export class ApiError extends Error {
@@ -45,11 +45,11 @@ export const api = {
     req<Project>("PUT", `/api/projects/${id}`, { rev, doc, name }),
   deleteProject: (id: string) => req<{ ok: boolean }>("DELETE", `/api/projects/${id}`),
 
-  importFile: (id: string, file: File, onProgress?: (f: number) => void) =>
-    new Promise<Job>((resolve, reject) => {
+  importFile: (id: string, file: File, onProgress?: (f: number) => void, prepare = true) =>
+    new Promise<Job | null>((resolve, reject) => {
       // XHR para poder mostrar el progreso de subida
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/api/projects/${id}/import`);
+      xhr.open("POST", `/api/projects/${id}/import?prepare=${prepare}`);
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
       xhr.onload = () => {
         const data = safeJson(xhr.responseText);
@@ -61,7 +61,12 @@ export const api = {
       fd.append("file", file);
       xhr.send(fd);
     }),
-  importPath: (id: string, path: string) => req<Job>("POST", `/api/projects/${id}/import-path`, { path }),
+  importPath: (id: string, path: string, prepare = true) =>
+    req<Job | null>("POST", `/api/projects/${id}/import-path`, { path, prepare }),
+  auto: (id: string, r: AutoRequest) => req<Job>("POST", `/api/projects/${id}/auto`, r),
+  prepare: (id: string) => req<Job>("POST", `/api/projects/${id}/prepare`),
+  job: (jid: string) => req<Job>("GET", `/api/jobs/${jid}`),
+  fontsBundled: () => req<BundledFont[]>("GET", "/api/fonts/bundled"),
 
   transcribe: (id: string, model: string, language: string | null) =>
     req<Job>("POST", `/api/projects/${id}/transcribe`, { model, language }),

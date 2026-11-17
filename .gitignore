@@ -4,14 +4,13 @@ __pycache__/
 .venv/
 venv/
 node_modules/
-frontend/dist/
 *.mp4
 *.mov
 *.mkv
 .DS_Store
 
-build/
-dist/
+/build/
+/dist/
 iniciar
 iniciar.command
 Iniciar Smart Video Editor.bat

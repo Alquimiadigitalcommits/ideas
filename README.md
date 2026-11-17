@@ -3,7 +3,9 @@
 Editor de video local que importa un video, lo transcribe, propone cortes de silencios,
 genera subtítulos editables con estilo y exporta para TikTok, Reels, Shorts y YouTube con FFmpeg.
 
-Estado: **etapas 0 a 5 completas; etapa 6 parcial** (ejecutable autónomo listo, falta envoltorio nativo e instaladores). Diseño completo, riesgos y plan de etapas en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
+Estado: **etapas 0 a 5 completas, modo automático de un clic; etapa 6 parcial** (ejecutable autónomo listo, falta envoltorio nativo). Diseño completo, riesgos y plan de etapas en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
+
+![Modo automático](docs/captura-auto.png)
 
 ![Editor](docs/captura-editor.png)
 
@@ -20,25 +22,57 @@ Estado: **etapas 0 a 5 completas; etapa 6 parcial** (ejecutable autónomo listo,
 
 FFmpeg: en Windows `winget install Gyan.FFmpeg`; en macOS `brew install ffmpeg`; en Linux `apt install ffmpeg`.
 
-## Instalación rápida (un comando)
+## Instalación en Windows (doble clic)
 
-Descarga el proyecto (botón verde **Code → Download ZIP** en GitHub, o `git clone`) y, dentro de la carpeta:
+1. En GitHub: botón verde **Code → Download ZIP**. Descomprime el archivo (clic derecho → **Extraer todo**).
+2. Abre la carpeta y haz **doble clic en `INSTALAR.bat`**. Acepta los avisos de Windows si los hay.
+3. Al final verás una verificación con líneas `[OK]`. Abre **Smart Video Editor** desde el escritorio.
 
-- **Windows 10/11** (PowerShell):
+El instalador instala lo que falte: Python 3.12, FFmpeg y **Microsoft Visual C++ Redistributable**, que necesita la
+transcripción. Funciona con o sin `winget`. La interfaz viene compilada, así que no hace falta Node.js. Descarga el
+modelo de transcripción y termina con una verificación real: graba un subtítulo en un video y transcribe un audio de prueba.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\instalar.ps1
-```
-
-- **macOS / Linux** (Terminal):
+En macOS o Linux:
 
 ```bash
 bash scripts/instalar.sh
 ```
 
-El instalador revisa Python, Node y FFmpeg, instala los que falten (winget en Windows, Homebrew en macOS,
-apt en Linux), prepara todo y crea el lanzador: un acceso **Smart Video Editor** en el escritorio de Windows,
-o `iniciar.command` en macOS. Probado en Linux (41 s sobre un clon limpio); en Windows y macOS aún no se ha probado.
+Ambos instaladores corren la misma verificación. El de macOS/Linux se probó en Linux. El de Windows se revisó a mano,
+pero aún no se ha ejecutado en un Windows real.
+
+## Cómo usarlo
+
+**Modo automático (recomendado):** en el inicio, **✨ Crear video automático** →
+
+1. elige el video →
+2. elige la plataforma (TikTok, Reels, Shorts, YouTube o feed de Instagram) →
+3. elige el estilo de subtítulos y toca **Crear mi video**.
+
+El programa transcribe, quita silencios, encuadra siguiendo el rostro, mejora el audio y exporta. Al terminar:
+descargar el MP4 o el SRT, **ajustar en el editor**, o **crear la versión para otra plataforma** (no vuelve a transcribir).
+
+Los ajustes se eligen según el equipo. Con 4 hilos o menos, menos de 8 GB de RAM o sin AVX2, se usa el perfil
+"modesto": transcripción `base` con búsqueda más corta y exportación `veryfast`. La vista previa de alta calidad
+(proxy) solo se genera si el navegador no puede reproducir el original.
+
+**Editor manual:** **🎬 Editar manualmente** desde el inicio, o **✏️ Ajustar en el editor** al terminar el modo automático.
+La guía arriba del panel derecho muestra el siguiente paso.
+
+## Solución de problemas
+
+**Los subtítulos no se generan (Windows).** Ejecuta la verificación desde la carpeta `backend`:
+
+```powershell
+.venv\Scripts\python.exe -m app.selfcheck
+```
+
+Si dice que faltan componentes de Windows, instala https://aka.ms/vs/17/release/vc_redist.x64.exe y reinicia el editor.
+La app también lo muestra en un aviso rojo en el inicio y en el asistente.
+
+**La primera transcripción tarda o falla.** La primera vez descarga el modelo (`base` pesa unos 145 MB) y necesita internet.
+
+**Todo va lento.** Cierra otros programas al exportar, usa el ritmo "Natural" y exporta en 1080p.
 
 ## Instalación manual
 
@@ -134,7 +168,13 @@ omiten si no está instalado.
 node e2e/stages.cjs video_con_rostro_y_voz.mp4 musica.mp3 carpeta_capturas
 ```
 
-Resultado actual: 72 tests de backend, 8 de frontend y las dos pruebas E2E en navegador, todos pasando.
+```bash
+node e2e/auto.cjs video_con_voz.mp4 carpeta_capturas
+```
+
+Resultado actual: 84 tests de backend, 8 de frontend y tres pruebas E2E en navegador (`smoke`, `stages`, `auto`), todos pasando.
+
+Dependencias de desarrollo: `pip install -r backend/requirements-dev.txt`.
 
 ## Qué funciona (verificado con tests)
 
@@ -177,6 +217,12 @@ Resultado actual: 72 tests de backend, 8 de frontend y las dos pruebas E2E en na
 | Ducking (la música baja cuando hay voz) | ✅ | Banda de la música ≥ 6 dB más baja bajo la voz |
 | Fundido a negro de entrada y salida del resultado (imagen y sonido) | ✅ | Luminancia y nivel medidos |
 | **Etapa 6** · Ejecutable autónomo con FFmpeg incluido | ✅ Linux | Flujo completo por API sin FFmpeg en el sistema |
+| **Modo automático**: video → plataforma → estilo → MP4 listo | ✅ | `test_auto.py`, E2E `auto.cjs` (21,6 s de video listos en 10 s) |
+| Versión para otra plataforma sin volver a transcribir | ✅ | E2E: versión YouTube en 5,8 s |
+| Ajustes automáticos según el equipo (perfil modesto/normal) | ✅ | `hardware.profile()` |
+| Diagnóstico de transcripción con mensaje claro (Visual C++, internet, memoria) | ✅ | `test_missing_windows_runtime_is_explained`, E2E con el error simulado |
+| 8 fuentes incluidas; la vista previa usa la escala medida de cada fuente contra libass | ✅ | Altura medida vs. prevista: error ≤ 3 px |
+| Autoverificación del instalador (`python -m app.selfcheck`) | ✅ | `test_selfcheck_passes` |
 
 ## Pendiente (no implementado)
 

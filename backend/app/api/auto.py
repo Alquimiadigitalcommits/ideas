@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import config, db
-from ..engine import facetrack, hardware, render, transcribe
+from ..engine import facetrack, hardware, render, subtitles, transcribe
 from ..engine.reframe import ASPECTS
 from ..jobs import JobContext, manager
 from ..schemas import AutoEditSettings, ExportRequest, Job, ProjectDoc, SubtitleStyle
@@ -30,6 +30,7 @@ class AutoRequest(BaseModel):
     enhance_audio: bool = True                   # quitar graves + reducción de ruido + volumen estándar
     language: Optional[str] = "es"
     whisper_model: Optional[str] = None          # None = según el equipo
+    reuse_transcript: bool = True                # otra plataforma con el mismo video: no volver a transcribir
 
 
 PACE = {
@@ -39,13 +40,13 @@ PACE = {
 }
 
 
-def plan_steps(req: AutoRequest, info) -> list[tuple[str, float]]:
+def plan_steps(req: AutoRequest, info, has_transcript: bool = False) -> list[tuple[str, float]]:
     """Pasos con su peso relativo (estimado según cuánto tarda cada uno por minuto de video)."""
     target = render.PROFILES.get(req.platform, render.PROFILES["tiktok"])["aspect"]
     aw, ah = ASPECTS[target]
     reframe = abs(info.width / info.height - aw / ah) > 0.05
     steps = [("analizar", 0.04)]
-    if info.has_audio and (req.subtitles or req.remove_silences):
+    if info.has_audio and (req.subtitles or req.remove_silences) and not (req.reuse_transcript and has_transcript):
         steps.append(("transcribir", 0.30))
     if info.has_audio and req.remove_silences:
         steps.append(("silencios", 0.04))
@@ -72,7 +73,8 @@ def start_auto(pid: str, req: AutoRequest):
         raise HTTPException(503, transcribe.import_error())
     hw = hardware.profile()
     model = req.whisper_model or hw["whisper_model"]
-    steps = plan_steps(req, info)
+    has_transcript = any(c.words for c in p.doc.captions)
+    steps = plan_steps(req, info, has_transcript)
     prof = render.PROFILES[req.platform]
 
     def run(ctx: JobContext):
@@ -91,12 +93,16 @@ def start_auto(pid: str, req: AutoRequest):
                     d.format.track_enabled = False
                     d.format.jump_zoom = 0.08 if req.pace == "dinamico" else 0.0
                     if req.subtitle_style:
+                        regroup = (req.subtitle_style.max_words != d.subtitle_style.max_words
+                                   or req.subtitle_style.max_chars != d.subtitle_style.max_chars)
                         d.subtitle_style = req.subtitle_style
+                        if regroup and d.captions:
+                            d.captions = subtitles.regroup(d.captions, d.subtitle_style.max_words,
+                                                           d.subtitle_style.max_chars)
                     d.audio.highpass = req.enhance_audio
                     d.audio.denoise = req.enhance_audio
                     d.audio.denoise_strength = 0.5
-                    if not req.subtitles:
-                        d.captions = []
+
                 db.update_doc(pid, setup)
             elif name == "transcribir":
                 r = do_transcribe(pid, info, model, req.language, ctx,
@@ -127,6 +133,8 @@ def start_auto(pid: str, req: AutoRequest):
                 assert cur
                 stem = Path(info.file_name).stem
                 base = _SAFE.sub("_", f"{stem}_{req.platform}_{time.strftime('%Y%m%d-%H%M%S')}").strip()
+                if not req.subtitles:   # se conserva la transcripción (sirve para los cortes), sin grabarla
+                    cur = cur.model_copy(update={"doc": cur.doc.model_copy(update={"captions": []})})
                 ereq = ExportRequest(profile=req.platform, burn_subtitles=req.burn_subtitles and req.subtitles,
                                      write_srt=req.subtitles, normalize_audio=req.enhance_audio,
                                      preset=hw["export_preset"], crf=21)

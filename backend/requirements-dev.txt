@@ -1,0 +1,6 @@
+# Desarrollo y pruebas (no las necesita quien solo usa el editor)
+-r requirements.txt
+pytest>=8
+httpx>=0.27
+scikit-image>=0.22   # foto con rostro para el test de seguimiento
+pyinstaller>=6       # ejecutable autónomo

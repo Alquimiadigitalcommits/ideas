@@ -13,6 +13,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   await page.goto(url);
+  await page.getByRole("button", { name: /Editar manualmente/ }).click();
   console.log("H.264 en este navegador:", await page.evaluate(() =>
     document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"') || "no"));
 
@@ -25,7 +26,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   await page.waitForTimeout(800);
   console.log("✓ importado y preparado");
 
-  await page.getByRole("button", { name: "Subtítulos", exact: true }).click();
+  await page.locator(".tabs button", { hasText: /^Subtítulos$/ }).click();
   await page.getByRole("button", { name: /Transcribir/ }).click();
   await page.locator(".caption-list li").first().waitFor({ timeout: 180000 });
   const caps = await page.locator(".caption-list li").count();
@@ -36,7 +37,8 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   await ta.fill("Hola a todos, bienvenidos");
   await ta.press("Enter");
 
-  await page.getByRole("button", { name: "✨ Auto-editar" }).click();
+  await page.locator(".tabs button", { hasText: /^Cortes$/ }).click();
+  await page.getByRole("button", { name: /Detectar y cortar silencios/ }).click();
   await page.locator(".cut-list li").first().waitFor({ timeout: 60000 });
   const cuts = await page.locator(".cut-list li").count();
   const stats = await page.locator(".stats").innerText();
@@ -47,9 +49,9 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   console.log("✓ corte recuperado; activos:", await page.locator(".cut-region.on").count());
 
   // formato 9:16 + estilo
-  await page.getByRole("button", { name: "Formato" }).click();
+  await page.locator(".tabs button", { hasText: /^Formato$/ }).click();
   await page.getByRole("button", { name: /9:16/ }).click();
-  await page.getByRole("button", { name: "Estilo" }).click();
+  await page.locator(".tabs button", { hasText: /^Estilo$/ }).click();
   await page.getByRole("button", { name: /IMPACTO/ }).click();
   // posicionar el cabezal sobre una palabra para ver el subtítulo
   await page.evaluate(() => { const v = document.querySelector("video.fg-video"); v.currentTime = 2.3; });
@@ -58,7 +60,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
   await shot(page, "02-editor-9x16");
   console.log("✓ subtítulo visible:", await page.locator(".sub-overlay").innerText().catch(() => "(ninguno)"));
 
-  await page.getByRole("button", { name: "Formato" }).click();
+  await page.locator(".tabs button", { hasText: /^Formato$/ }).click();
   await page.getByRole("button", { name: "Fondo desenfocado" }).click();
   await page.getByRole("button", { name: /16:9/ }).click();
   await page.waitForTimeout(600);
@@ -79,6 +81,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(shots, name + ".p
 
   // recarga: el proyecto debe persistir
   await page.reload();
+  await page.locator(".home-project").first().click();   // la app abre en Inicio: el proyecto está en "recientes"
   await page.locator(".cut-list li").first().waitFor({ timeout: 20000 });
   console.log("✓ tras recargar: cortes", await page.locator(".cut-list li").count(),
     "| recuperados", await page.locator(".cut-list li.off").count());

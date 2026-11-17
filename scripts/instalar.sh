@@ -33,11 +33,12 @@ fi
 [[ -n "$PY" ]] || { echo "No se pudo instalar Python 3.10+"; exit 1; }
 echo "OK: $($PY --version)"
 
-say "Revisando Node.js 18 o superior"
-if ! have node || [[ "$(node -p 'process.versions.node.split(".")[0]')" -lt 18 ]]; then
-  if [[ "$(uname)" == "Darwin" ]]; then pkg_install node; else pkg_install nodejs npm; fi
+if [[ ! -f frontend/dist/index.html ]]; then
+  say "Revisando Node.js 18 o superior (solo para compilar la interfaz)"
+  if ! have node || [[ "$(node -p 'process.versions.node.split(".")[0]')" -lt 18 ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then pkg_install node; else pkg_install nodejs npm; fi
+  fi
 fi
-echo "OK: node $(node --version)"
 
 say "Revisando FFmpeg"
 have ffmpeg && have ffprobe || pkg_install ffmpeg
@@ -48,8 +49,12 @@ say "Creando entorno de Python (backend/.venv)"
 backend/.venv/bin/python -m pip install -q --upgrade pip
 backend/.venv/bin/python -m pip install -q -r backend/requirements.txt
 
-say "Compilando la interfaz"
-(cd frontend && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
+if [[ -f frontend/dist/index.html ]]; then
+  say "Interfaz ya compilada (no hace falta Node.js)"
+else
+  say "Compilando la interfaz"
+  (cd frontend && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
+fi
 
 say "Creando el lanzador"
 LAUNCH="$ROOT/iniciar.command"
@@ -59,6 +64,9 @@ cd "$ROOT/backend" && exec ./.venv/bin/python -m app
 LAUNCHER
 chmod +x "$LAUNCH"
 ln -sf "$LAUNCH" "$ROOT/iniciar"
+
+say "Verificando (descarga el modelo de transcripción la primera vez, ~145 MB)"
+(cd backend && ./.venv/bin/python -m app.selfcheck) || echo "La verificación encontró problemas: revisa las líneas [FALLA]."
 
 say "Listo"
 echo "Para abrir el editor: doble clic en iniciar.command (macOS) o ejecuta  $ROOT/iniciar"

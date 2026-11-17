@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
 import type { Cut, ExportRequest, Job, SystemInfo } from "./api/types";
 import { AudioPanel } from "./components/AudioPanel";
+import { AutoWizard } from "./components/AutoWizard";
+import { Home } from "./components/Home";
 import { AutoEditPanel } from "./components/AutoEditPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { FormatPanel } from "./components/FormatPanel";
@@ -17,6 +19,7 @@ import { Timeline } from "./components/Timeline";
 import { TransitionsPanel } from "./components/TransitionsPanel";
 import { Transport } from "./components/Transport";
 import { uid } from "./lib/captions";
+import { loadBundledFonts } from "./lib/fonts";
 import { fmtBytes } from "./lib/format";
 import { editSegments } from "./lib/joins";
 import { toOutput } from "./lib/timemap";
@@ -29,7 +32,11 @@ const TABS: [Tab, string][] = [["autoedit", "Cortes"], ["subtitles", "Subtítulo
 
 const SAVE_LABEL = { saved: "Guardado ✓", dirty: "Cambios sin guardar…", saving: "Guardando…", error: "Error al guardar" };
 
+type View = "home" | "wizard" | "editor";
+
 export default function App() {
+  const [view, setView] = useState<View>("home");
+  const [wizardProject, setWizardProject] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(() => localStorage.getItem("sve.project"));
   const [showProjects, setShowProjects] = useState(true);
   const [system, setSystem] = useState<SystemInfo | null>(null);
@@ -54,6 +61,8 @@ export default function App() {
     useProject(projectId);
   const doc = project?.doc;
 
+  useEffect(() => { loadBundledFonts(); }, []);
+
   useEffect(() => {
     api.system().then(setSystem).catch(() => setSystemError("No se puede conectar con el motor local. ¿Está corriendo el backend?"));
     api.fonts().then(setFonts).catch(() => {});
@@ -63,6 +72,14 @@ export default function App() {
     projectId ? localStorage.setItem("sve.project", projectId) : localStorage.removeItem("sve.project");
     setSelectedCut(null); setSelectedCaption(null); setMarkIn(null); setMarkOut(null); setCurrentTime(0); setLastExport(null);
   }, [projectId]);
+
+  // vista previa perezosa: solo se genera el proxy cuando se abre el editor y hace falta
+  useEffect(() => {
+    if (view === "editor" && project && project.doc.media && !project.doc.proxy_ready && project.media_available !== false) {
+      api.prepare(project.id).then(() => refreshJobsRef.current?.()).catch(() => {});
+    }
+  }, [view, project?.id, project?.doc.proxy_ready, project?.doc.media?.source_path]);
+  const refreshJobsRef = useRef<(() => void) | null>(null);
 
   const onJobFinished = useCallback((j: Job) => {
     if (j.status === "done") {
@@ -82,6 +99,8 @@ export default function App() {
   }, [reload]);
 
   const { jobs, isRunning, refresh: refreshJobs } = useJobs(projectId, onJobFinished);
+  refreshJobsRef.current = refreshJobs;
+  const openEditor = (id: string | null) => { setProjectId(id); setView("editor"); };
 
   useEffect(() => {
     if (!toast) return;
@@ -101,7 +120,9 @@ export default function App() {
 
   const runAutoEdit = () => doc && start(() => api.autoedit(project!.id, doc.autoedit));
   const runTranscribe = (model: string, lang: string | null) => start(() => api.transcribe(project!.id, model, lang));
-  const runExport = (r: ExportRequest) => start(() => api.export(project!.id, r));
+  // velocidad de codificación según el equipo (veryfast en equipos modestos)
+  const runExport = (r: ExportRequest) =>
+    start(() => api.export(project!.id, { ...r, preset: system?.hardware?.export_preset ?? r.preset }));
   const runScenes = (th: number) => start(() => api.scenes(project!.id, th));
   const runFaceTrack = () => start(() => api.facetrack(project!.id));
   const runPreview = (center: number) => start(() => api.previewClip(project!.id, center, 3));
@@ -164,9 +185,31 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [doc?.media, currentTime, markIn, selectedCut, cutMarkedRange, seek, updateCuts, undo, redo, splitHere]);
 
+  if (view === "home") {
+    return (
+      <Home system={system} onAuto={() => { setWizardProject(null); setView("wizard"); }}
+        onManual={() => setView("editor")} onOpen={(id) => openEditor(id)} />
+    );
+  }
+  if (view === "wizard") {
+    return (
+      <AutoWizard key={wizardProject ?? "nuevo"} system={system} projectId={wizardProject}
+        onProject={(id) => setProjectId(id)} onOpenEditor={(id) => openEditor(id)} onHome={() => setView("home")} />
+    );
+  }
+
+  const guide = doc?.media ? [
+    { key: "subtitles" as Tab, label: "Subtítulos", done: doc.captions.length > 0 },
+    { key: "autoedit" as Tab, label: "Silencios", done: doc.cuts.some((c) => c.kind !== "split") },
+    { key: "format" as Tab, label: "Formato", done: true },
+    { key: "export" as Tab, label: "Exportar", done: !!lastExport && lastExport.status === "done" },
+  ] : [];
+  const nextStep = guide.find((g) => !g.done);
+
   return (
     <div className={"app" + (showProjects ? "" : " no-projects")}>
       <header className="topbar">
+        <button className="icon-btn" title="Volver al inicio" onClick={() => setView("home")}>🏠</button>
         <button className="icon-btn" title="Proyectos" onClick={() => setShowProjects(!showProjects)}>☰</button>
         <div className="brand">Smart<b>Video</b>Editor</div>
         {project && (
@@ -185,8 +228,9 @@ export default function App() {
         )}
         {doc?.media && (
           <>
-            <button className="btn accent" disabled={isRunning("autoedit")} onClick={() => { setTab("autoedit"); runAutoEdit(); }}>
-              ✨ Auto-editar
+            <button className="btn accent" title="Subtítulos, silencios, formato, audio y exportación en un paso"
+              onClick={async () => { await flush(); setWizardProject(project!.id); setView("wizard"); }}>
+              ✨ Hacer todo automático
             </button>
             <button className="btn primary" onClick={() => setTab("export")}>⇩ Exportar</button>
           </>
@@ -194,6 +238,7 @@ export default function App() {
       </header>
 
       {systemError && <div className="banner error">{systemError}</div>}
+      {system?.whisper_error && <div className="banner error">Subtítulos no disponibles: {system.whisper_error}</div>}
       {system && !system.ffmpeg.ok && <div className="banner error">FFmpeg no está instalado o no se encuentra en el PATH.</div>}
       {notice && <div className="banner warn" onClick={() => setNotice(null)}>{notice} <small>(clic para cerrar)</small></div>}
 
@@ -219,6 +264,16 @@ export default function App() {
                 applyCuts={applyCuts} setApplyCuts={setApplyCuts} />
             </div>
             <aside className="inspector">
+              {guide.length > 0 && (
+                <div className="guide">
+                  {guide.map((g, i) => (
+                    <button key={g.key} className={"guide-step" + (g.done ? " done" : "") + (g === nextStep ? " next" : "")}
+                      onClick={() => setTab(g.key)}>
+                      <span className="gs-dot">{g.done ? "✓" : i + 1}</span>{g.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <nav className="tabs">
                 {TABS.map(([k, l]) => (
                   <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
@@ -228,7 +283,7 @@ export default function App() {
                 running={isRunning("autoedit")} onSeek={seek} selectedCut={selectedCut} setSelectedCut={setSelectedCut} />}
               {tab === "subtitles" && <SubtitlesPanel projectId={project.id} doc={doc} updateDoc={updateDoc}
                 runTranscribe={runTranscribe} running={isRunning("transcribe")} models={system?.whisper_models ?? ["base"]}
-                defaultModel={system?.default_whisper_model ?? "base"} currentTime={currentTime} onSeek={seek}
+                defaultModel={system?.hardware?.whisper_model ?? system?.default_whisper_model ?? "base"} currentTime={currentTime} onSeek={seek}
                 selectedCaption={selectedCaption} setSelectedCaption={setSelectedCaption} />}
               {tab === "style" && <StylePanel doc={doc} updateDoc={updateDoc} fonts={fonts} />}
               {tab === "format" && <FormatPanel doc={doc} updateDoc={updateDoc} runFaceTrack={runFaceTrack}

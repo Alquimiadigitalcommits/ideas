@@ -18,6 +18,7 @@ const api = (page, p) => page.evaluate((u) => fetch(u).then((r) => r.json()), p)
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("dialog", (d) => d.accept());
   await page.goto(url);
+  await page.getByRole("button", { name: /Editar manualmente/ }).click();
 
   await page.getByRole("button", { name: "+ Nuevo" }).click();
   await page.locator('input[type="file"][accept*=".mp4"]').setInputFiles(video);
@@ -32,7 +33,8 @@ const api = (page, p) => page.evaluate((u) => fetch(u).then((r) => r.json()), p)
   await idle(page);
 
   // auto-edición + deshacer/rehacer
-  await page.getByRole("button", { name: "✨ Auto-editar" }).click();
+  await page.locator(".tabs button", { hasText: /^Cortes$/ }).click();
+  await page.getByRole("button", { name: /Detectar y cortar silencios/ }).click();
   await page.locator(".cut-region").first().waitFor({ timeout: 60000 });
   await idle(page);
   await page.waitForTimeout(500);

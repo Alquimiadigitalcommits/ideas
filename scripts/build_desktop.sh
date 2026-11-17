@@ -12,6 +12,8 @@ python -m PyInstaller --noconfirm --clean --onedir --name SmartVideoEditor \
   --distpath "$ROOT/dist" --workpath "$ROOT/build/pyinstaller" --specpath "$ROOT/build" \
   --paths "$ROOT/backend" \
   --add-data "$ROOT/frontend/dist${SEP}frontend_dist" \
+  --add-data "$ROOT/backend/app/assets/fonts${SEP}app/assets/fonts" \
+  --collect-data fontTools --hidden-import app.selfcheck --hidden-import app.api.auto \
   --collect-data faster_whisper --collect-binaries ctranslate2 \
   --collect-submodules uvicorn --collect-data cv2 --collect-submodules scenedetect \
   --hidden-import app.main \

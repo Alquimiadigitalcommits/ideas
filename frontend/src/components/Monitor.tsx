@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Caption, ProjectDoc } from "../api/types";
+import { cssScale } from "../lib/fonts";
 import { ASPECT_RATIO } from "../lib/format";
 import { computeJoins, editSegments, trackOffsetAt } from "../lib/joins";
 import { activeCuts, cutEndAt, outputDuration, toOutput } from "../lib/timemap";
@@ -142,9 +143,8 @@ export function Monitor({ projectId, doc, videoRef, applyCuts, onTime, onPlaying
   const scale = 1 + jump + zoomFx;
 
   const k = Math.min(box.w, box.h) / 1080;
-  // libass usa el tamaño como altura total de línea (ascendente+descendente ≈ 1.21 em en Inter/DejaVu);
-  // CSS lo usa como em. Este factor iguala la vista previa con el render final.
-  const ASS_TO_CSS = 0.82;
+  // libass dimensiona con winAscent+winDescent de cada fuente y CSS con el em: el factor se mide por fuente
+  const ASS_TO_CSS = cssScale(style.font_family);
   const cap = findCaption(doc.captions, currentTime);
   const wordIdx = cap ? cap.words.findIndex((w, i) => currentTime >= w.start &&
     (i === cap.words.length - 1 || currentTime < cap.words[i + 1].start)) : -1;
